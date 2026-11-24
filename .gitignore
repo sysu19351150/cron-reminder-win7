@@ -1,0 +1,26 @@
+# Node.js 依赖与运行日志
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# 项目临时文件
+*.tmp
+*.tmp.json
+*.log
+
+# 用户私有提醒配置（不提交个人自定义规则）
+data/*.json
+!data/.gitkeep
+
+# Windows7 系统专属垃圾文件
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.lnk
+
+# 后续打包生成的临时文件
+dist/
+build/
+*.exe

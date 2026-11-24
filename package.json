@@ -1,0 +1,13 @@
+{
+  "name": "win7-tiny-reminder",
+  "version": "1.0.0",
+  "main": "server.js",
+  "dependencies": {
+    "lodash": "^4.17.21",
+    "node-cron": "^3.0.2",
+    "node-notifier": "^10.0.1"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

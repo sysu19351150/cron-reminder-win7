@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>定时提醒配置</title>
+  <style>
+    * { margin: 10px; font-family: "微软雅黑"; }
+    .form-group { margin: 15px 0; }
+    input, textarea { width: 300px; padding: 5px; }
+    button { padding: 6px 15px; cursor: pointer; margin-right: 8px; }
+    .reminder-item { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+    .edit-tip { color: #2196F3; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>定时提醒配置</h1>
+  
+  <div>
+    <h3 id="formTitle">新增提醒</h3>
+    <div class="form-group">
+      <label>提醒名称：</label>
+      <input id="name" type="text" placeholder="比如：喝水提醒">
+    </div>
+    <div class="form-group">
+      <label>Cron表达式：</label>
+      <input id="cronExpr" type="text" placeholder="比如 0 */30 * * * * 每30分钟触发一次">
+    </div>
+    <div class="form-group">
+      <label>提示内容：</label>
+      <textarea id="content" placeholder="该站起来喝杯水啦"></textarea>
+    </div>
+    <div class="form-group">
+      <label>启用：</label>
+      <input id="enabled" type="checkbox" checked>
+    </div>
+    <button id="saveBtn" onclick="saveReminder()">保存提醒</button>
+    <button id="cancelEditBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
+  </div>
+
+  <hr>
+  <h3>已配置提醒列表</h3>
+  <div id="list"></div>
+
+  <script>
+    let currentEditId = null; // 标记当前是否处于编辑模式
+
+    async function loadList() {
+      const res = await fetch('/api/reminders');
+      const list = await res.json();
+      const container = document.getElementById('list');
+      container.innerHTML = '';
+      list.forEach(item => {
+        const div = document.createElement('div');
+        div.className = 'reminder-item';
+        div.innerHTML = `
+          <p>名称：${item.name}</p>
+          <p>规则：${item.cronExpr}</p>
+          <p>内容：${item.content}</p>
+          <p>状态：${item.enabled ? '已启用' : '已禁用'}</p>
+          <button onclick="editReminder('${item.id}')">编辑</button>
+          <button onclick="delReminder('${item.id}')">删除</button>
+        `;
+        container.appendChild(div);
+      })
+    }
+
+    // 进入编辑模式，回填数据
+    async function editReminder(id) {
+      const res = await fetch('/api/reminders');
+      const list = await res.json();
+      const target = list.find(item => item.id === id);
+      
+      currentEditId = id;
+      document.getElementById('formTitle').innerText = '编辑提醒';
+      document.getElementById('formTitle').classList.add('edit-tip');
+      document.getElementById('name').value = target.name;
+      document.getElementById('cronExpr').value = target.cronExpr;
+      document.getElementById('content').value = target.content;
+      document.getElementById('enabled').checked = target.enabled;
+      document.getElementById('cancelEditBtn').style.display = 'inline';
+    }
+
+    // 取消编辑，重置表单
+    function cancelEdit() {
+      currentEditId = null;
+      document.getElementById('formTitle').innerText = '新增提醒';
+      document.getElementById('formTitle').classList.remove('edit-tip');
+      document.getElementById('name').value = '';
+      document.getElementById('cronExpr').value = '';
+      document.getElementById('content').value = '';
+      document.getElementById('enabled').checked = true;
+      document.getElementById('cancelEditBtn').style.display = 'none';
+    }
+
+    async function saveReminder() {
+      const data = {
+        name: document.getElementById('name').value,
+        cronExpr: document.getElementById('cronExpr').value,
+        content: document.getElementById('content').value,
+        enabled: document.getElementById('enabled').checked
+      }
+      // 如果是编辑模式，带上id字段
+      if (currentEditId) data.id = currentEditId;
+
+      await fetch('/api/reminders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      })
+      cancelEdit();
+      loadList();
+      alert('保存成功');
+    }
+
+    async function delReminder(id) {
+      await fetch(`/api/reminders/${id}`, { method: 'DELETE' })
+      // 如果删除的是当前正在编辑的条目，自动退出编辑模式
+      if (currentEditId === id) cancelEdit();
+      loadList();
+    }
+
+    loadList();
+  </script>
+</body>
+</html>
