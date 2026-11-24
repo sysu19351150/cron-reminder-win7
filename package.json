@@ -2,12 +2,26 @@
   "name": "win7-tiny-reminder",
   "version": "1.0.0",
   "main": "server.js",
+  "bin": "server.js",
   "dependencies": {
     "lodash": "^4.17.21",
     "node-cron": "^3.0.2",
     "node-notifier": "^10.0.1"
   },
+  "devDependencies": {
+    "pkg": "^5.8.1"
+  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "npx pkg . --targets node16-win-x64 --output dist/reminder-server.exe"
+  },
+  "pkg": {
+    "assets": [
+      "public/**/*",
+      "node_modules/node-notifier/vendor/notifu/notifu-x64.exe"
+    ],
+    "scripts": [
+      "server.js"
+    ]
   }
 }

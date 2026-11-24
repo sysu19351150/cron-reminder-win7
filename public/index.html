@@ -2,89 +2,440 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>定时提醒配置</title>
   <style>
-    * { margin: 10px; font-family: "微软雅黑"; }
-    .form-group { margin: 15px 0; }
-    input, textarea { width: 300px; padding: 5px; }
-    button { padding: 6px 15px; cursor: pointer; margin-right: 8px; }
-    .reminder-item { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
-    .edit-tip { color: #2196F3; font-weight: bold; }
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 28px 16px 56px;
+      font-family: "微软雅黑", "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #333;
+      background: #f0f2f5;
+    }
+
+    .wrap { max-width: 860px; margin: 0 auto; }
+
+    /* ---------- 页头 ---------- */
+    .page-head { margin-bottom: 22px; }
+
+    .page-title {
+      margin: 0;
+      padding-left: 12px;
+      font-size: 22px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: #1f2d3d;
+      border-left: 4px solid #2d8cf0;
+    }
+
+    .page-desc {
+      margin: 6px 0 0 16px;
+      font-size: 13px;
+      color: #8a94a6;
+    }
+
+    /* ---------- 卡片 ---------- */
+    .card {
+      padding: 20px 24px;
+      margin-bottom: 20px;
+      background: #fff;
+      border: 1px solid #e3e8ee;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+    }
+
+    .card-title {
+      display: flex;
+      align-items: center;
+      margin: 0 0 18px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2d3d;
+      transition: color .15s;
+    }
+
+    .card-title.is-edit { color: #2d8cf0; }
+
+    .card-title .tag {
+      display: none;
+      margin-left: 8px;
+      padding: 0 8px;
+      font-size: 12px;
+      font-weight: normal;
+      line-height: 18px;
+      color: #2d8cf0;
+      background: #eaf4fe;
+      border: 1px solid #bfdcfb;
+      border-radius: 10px;
+    }
+
+    .card-title.is-edit .tag { display: inline-block; }
+
+    /* ---------- 表单 ---------- */
+    .form-group {
+      display: flex;
+      align-items: flex-start;
+      margin-bottom: 14px;
+    }
+
+    .form-group > label {
+      flex: 0 0 96px;
+      padding: 7px 12px 0 0;
+      text-align: right;
+      color: #48576a;
+    }
+
+    .form-group .field { flex: 1; min-width: 0; }
+
+    input[type="text"],
+    textarea {
+      width: 100%;
+      padding: 7px 10px;
+      font-family: inherit;
+      font-size: 14px;
+      color: #333;
+      background: #fff;
+      border: 1px solid #d6dce4;
+      border-radius: 4px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+
+    input[type="text"]::placeholder,
+    textarea::placeholder { color: #b7c0cd; }
+
+    input[type="text"]:focus,
+    textarea:focus {
+      border-color: #2d8cf0;
+      box-shadow: 0 0 0 2px rgba(45, 140, 240, .15);
+    }
+
+    textarea {
+      min-height: 78px;
+      resize: vertical;
+    }
+
+    .check-line {
+      display: flex;
+      align-items: center;
+      padding-top: 6px;
+      color: #48576a;
+    }
+
+    .check-line input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0 8px 0 0;
+      cursor: pointer;
+    }
+
+    /* ---------- 按钮 ---------- */
+    .btn {
+      display: inline-block;
+      padding: 7px 18px;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.4;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color .15s, border-color .15s, color .15s;
+    }
+
+    .btn-primary {
+      color: #fff;
+      background: #2d8cf0;
+      border-color: #2d8cf0;
+    }
+    .btn-primary:hover { background: #2b85e4; border-color: #2b85e4; }
+    .btn-primary:active { background: #2573c8; }
+
+    .btn-default {
+      color: #48576a;
+      background: #fff;
+      border-color: #d6dce4;
+    }
+    .btn-default:hover { color: #2d8cf0; border-color: #2d8cf0; }
+
+    .btn-danger {
+      color: #ed4014;
+      background: #fff;
+      border-color: #f5c6b8;
+    }
+    .btn-danger:hover { background: #fff4f0; border-color: #ed4014; }
+
+    .btn-sm { padding: 5px 14px; font-size: 13px; }
+
+    .form-actions {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px dashed #e3e8ee;
+    }
+    .form-actions .btn { margin-right: 10px; }
+
+    /* ---------- 列表 ---------- */
+    .reminder-item {
+      padding: 14px 16px;
+      margin-bottom: 12px;
+      background: #fbfcfd;
+      border: 1px solid #e3e8ee;
+      border-radius: 6px;
+      transition: border-color .15s, box-shadow .15s, background-color .15s;
+    }
+
+    .reminder-item:hover {
+      background: #fff;
+      border-color: #c5d6ea;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, .07);
+    }
+
+    .reminder-item:last-child { margin-bottom: 0; }
+
+    .item-head {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+
+    .item-name {
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2d3d;
+      word-break: break-all;
+    }
+
+    .badge {
+      flex: 0 0 auto;
+      margin-left: 10px;
+      padding: 0 8px;
+      font-size: 12px;
+      line-height: 18px;
+      border-radius: 10px;
+    }
+    .badge-on {
+      color: #19be6b;
+      background: #e8faf0;
+      border: 1px solid #b7f0cd;
+    }
+    .badge-off {
+      color: #808695;
+      background: #f4f5f7;
+      border: 1px solid #e3e5e8;
+    }
+
+    .item-row {
+      display: flex;
+      margin-bottom: 4px;
+      font-size: 13px;
+      color: #5c6b7f;
+    }
+
+    .item-row .k {
+      flex: 0 0 48px;
+      color: #97a3b4;
+    }
+
+    .item-row .v {
+      flex: 1;
+      min-width: 0;
+      word-break: break-all;
+    }
+
+    .mono {
+      font-family: Consolas, "Courier New", monospace;
+      color: #2d8cf0;
+    }
+
+    .item-actions {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px dashed #eaedf1;
+    }
+
+    .item-actions .btn { margin-right: 8px; }
+
+    .empty {
+      padding: 32px 0;
+      text-align: center;
+      font-size: 13px;
+      color: #a4adba;
+      background: #fbfcfd;
+      border: 1px dashed #dfe4ea;
+      border-radius: 6px;
+    }
+
+    /* ---------- 窄屏适配 ---------- */
+    @media (max-width: 640px) {
+      body { padding: 18px 12px 40px; }
+      .card { padding: 16px; }
+      .form-group { display: block; }
+      .form-group > label {
+        display: block;
+        flex: none;
+        width: auto;
+        padding: 0 0 6px;
+        text-align: left;
+      }
+      .item-head { flex-wrap: wrap; }
+    }
   </style>
 </head>
 <body>
-  <h1>定时提醒配置</h1>
-  
-  <div>
-    <h3 id="formTitle">新增提醒</h3>
-    <div class="form-group">
-      <label>提醒名称：</label>
-      <input id="name" type="text" placeholder="比如：喝水提醒">
-    </div>
-    <div class="form-group">
-      <label>Cron表达式：</label>
-      <input id="cronExpr" type="text" placeholder="比如 0 */30 * * * * 每30分钟触发一次">
-    </div>
-    <div class="form-group">
-      <label>提示内容：</label>
-      <textarea id="content" placeholder="该站起来喝杯水啦"></textarea>
-    </div>
-    <div class="form-group">
-      <label>启用：</label>
-      <input id="enabled" type="checkbox" checked>
-    </div>
-    <button id="saveBtn" onclick="saveReminder()">保存提醒</button>
-    <button id="cancelEditBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
-  </div>
+  <div class="wrap">
 
-  <hr>
-  <h3>已配置提醒列表</h3>
-  <div id="list"></div>
+    <div class="page-head">
+      <h1 class="page-title">定时提醒配置</h1>
+      <p class="page-desc">配置 Cron 表达式，到点自动推送提醒内容</p>
+    </div>
+
+    <!-- 表单 -->
+    <div class="card">
+      <h3 class="card-title" id="formTitle">
+        新增提醒
+        <span class="tag">编辑中</span>
+      </h3>
+
+      <div class="form-group">
+        <label for="name">提醒名称</label>
+        <div class="field">
+          <input id="name" type="text" placeholder="比如：喝水提醒">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="cronExpr">Cron 表达式</label>
+        <div class="field">
+          <input id="cronExpr" type="text" placeholder="比如：0 */30 * * * * （每 30 分钟触发一次）">
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="content">提示内容</label>
+        <div class="field">
+          <textarea id="content" placeholder="该站起来喝杯水啦"></textarea>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>状态</label>
+        <div class="field">
+          <div class="check-line">
+            <input id="enabled" type="checkbox" checked>
+            <label for="enabled">启用该提醒</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="saveReminder()">保存提醒</button>
+        <button class="btn btn-default" id="cancelEditBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
+      </div>
+    </div>
+
+    <!-- 列表 -->
+    <div class="card">
+      <h3 class="card-title">已配置提醒列表</h3>
+      <div id="list"></div>
+    </div>
+
+  </div>
 
   <script>
     let currentEditId = null; // 标记当前是否处于编辑模式
 
-    async function loadList() {
-      const res = await fetch('/api/reminders');
-      const list = await res.json();
-      const container = document.getElementById('list');
-      container.innerHTML = '';
-      list.forEach(item => {
-        const div = document.createElement('div');
-        div.className = 'reminder-item';
-        div.innerHTML = `
-          <p>名称：${item.name}</p>
-          <p>规则：${item.cronExpr}</p>
-          <p>内容：${item.content}</p>
-          <p>状态：${item.enabled ? '已启用' : '已禁用'}</p>
-          <button onclick="editReminder('${item.id}')">编辑</button>
-          <button onclick="delReminder('${item.id}')">删除</button>
-        `;
-        container.appendChild(div);
-      })
+    /* HTML 转义，防止内容破坏结构 */
+    function esc(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
     }
+
+    async function loadList() {
+      const container = document.getElementById('list');
+      try {
+        const res = await fetch('/api/reminders');
+        const list = await res.json();
+
+        if (!Array.isArray(list) || list.length === 0) {
+          container.innerHTML = '<div class="empty">暂无提醒配置，先在上方新增一条吧~</div>';
+          return;
+        }
+
+        container.innerHTML = '';
+        list.forEach(item => {
+          const div = document.createElement('div');
+          div.className = 'reminder-item';
+          div.innerHTML = `
+            <div class="item-head">
+              <span class="item-name">${esc(item.name)}</span>
+              <span class="badge ${item.enabled ? 'badge-on' : 'badge-off'}">${item.enabled ? '已启用' : '已禁用'}</span>
+            </div>
+            <div class="item-row">
+              <span class="k">规则</span>
+              <span class="v mono">${esc(item.cronExpr)}</span>
+            </div>
+            <div class="item-row">
+              <span class="k">内容</span>
+              <span class="v">${esc(item.content)}</span>
+            </div>
+            <div class="item-actions">
+              <button class="btn btn-default btn-sm" data-act="edit" data-id="${esc(item.id)}">编辑</button>
+              <button class="btn btn-danger btn-sm" data-act="del" data-id="${esc(item.id)}">删除</button>
+            </div>
+          `;
+          container.appendChild(div);
+        });
+      } catch (e) {
+        container.innerHTML = '<div class="empty">列表加载失败，请检查服务是否正常</div>';
+      }
+    }
+
+    /* 列表按钮事件委托 */
+    document.getElementById('list').addEventListener('click', function (e) {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      const id = btn.dataset.id;
+      if (btn.dataset.act === 'edit') editReminder(id);
+      else delReminder(id);
+    });
 
     // 进入编辑模式，回填数据
     async function editReminder(id) {
       const res = await fetch('/api/reminders');
       const list = await res.json();
-      const target = list.find(item => item.id === id);
-      
-      currentEditId = id;
-      document.getElementById('formTitle').innerText = '编辑提醒';
-      document.getElementById('formTitle').classList.add('edit-tip');
+      const target = list.find(item => String(item.id) === String(id));
+      if (!target) return;
+
+      currentEditId = target.id;
+
+      const title = document.getElementById('formTitle');
+      title.classList.add('is-edit');
+      title.firstChild.nodeValue = '编辑提醒';
+
       document.getElementById('name').value = target.name;
       document.getElementById('cronExpr').value = target.cronExpr;
       document.getElementById('content').value = target.content;
-      document.getElementById('enabled').checked = target.enabled;
-      document.getElementById('cancelEditBtn').style.display = 'inline';
+      document.getElementById('enabled').checked = !!target.enabled;
+      document.getElementById('cancelEditBtn').style.display = 'inline-block';
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     // 取消编辑，重置表单
     function cancelEdit() {
       currentEditId = null;
-      document.getElementById('formTitle').innerText = '新增提醒';
-      document.getElementById('formTitle').classList.remove('edit-tip');
+
+      const title = document.getElementById('formTitle');
+      title.classList.remove('is-edit');
+      title.firstChild.nodeValue = '新增提醒';
+
       document.getElementById('name').value = '';
       document.getElementById('cronExpr').value = '';
       document.getElementById('content').value = '';
@@ -94,28 +445,36 @@
 
     async function saveReminder() {
       const data = {
-        name: document.getElementById('name').value,
-        cronExpr: document.getElementById('cronExpr').value,
-        content: document.getElementById('content').value,
+        name: document.getElementById('name').value.trim(),
+        cronExpr: document.getElementById('cronExpr').value.trim(),
+        content: document.getElementById('content').value.trim(),
         enabled: document.getElementById('enabled').checked
-      }
-      // 如果是编辑模式，带上id字段
-      if (currentEditId) data.id = currentEditId;
+      };
+
+      if (!data.name) { alert('请填写提醒名称'); return; }
+      if (!data.cronExpr) { alert('请填写 Cron 表达式'); return; }
+
+      // 如果是编辑模式，带上 id 字段
+      if (currentEditId !== null) data.id = currentEditId;
 
       await fetch('/api/reminders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data)
-      })
+      });
+
       cancelEdit();
       loadList();
       alert('保存成功');
     }
 
     async function delReminder(id) {
-      await fetch(`/api/reminders/${id}`, { method: 'DELETE' })
+      if (!confirm('确定要删除这条提醒吗？')) return;
+
+      await fetch(`/api/reminders/${id}`, { method: 'DELETE' });
+
       // 如果删除的是当前正在编辑的条目，自动退出编辑模式
-      if (currentEditId === id) cancelEdit();
+      if (currentEditId !== null && String(currentEditId) === String(id)) cancelEdit();
       loadList();
     }
 
