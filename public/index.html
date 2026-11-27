@@ -75,6 +75,93 @@
 
     .card-title.is-edit .tag { display: inline-block; }
 
+    .collapse-btn {
+      margin-left: auto;
+      padding: 2px 8px;
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 18px;
+      color: #97a3b4;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: color .15s, border-color .15s, background-color .15s;
+    }
+
+    .collapse-btn:hover {
+      color: #2d8cf0;
+      background: #f2f8fe;
+      border-color: #d6e6fb;
+    }
+
+    .caret {
+      display: inline-block;
+      width: 0;
+      height: 0;
+      margin-left: 5px;
+      vertical-align: middle;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 5px solid currentColor;
+      transition: transform .2s;
+    }
+
+    .card.collapsed .caret { transform: rotate(-90deg); }
+
+    .card.collapsed .card-title { margin-bottom: 0; }
+
+    .card.collapsed .card-body { display: none; }
+
+    .collapsed-view { display: none; }
+
+    .card.collapsed .collapsed-view {
+      display: block;
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px dashed #e3e8ee;
+    }
+
+    .summary-label {
+      margin-right: 4px;
+      font-size: 12px;
+      color: #97a3b4;
+    }
+
+    .summary-chip {
+      display: inline-block;
+      max-width: 180px;
+      margin: 3px 6px 3px 0;
+      padding: 0 9px;
+      font-size: 12px;
+      line-height: 20px;
+      color: #48576a;
+      background: #f4f5f7;
+      border: 1px solid #e3e5e8;
+      border-radius: 10px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
+    }
+
+    .summary-chip b {
+      margin-right: 5px;
+      font-weight: 600;
+      color: #2d8cf0;
+    }
+
+    .summary-more {
+      font-size: 12px;
+      color: #97a3b4;
+    }
+
+    .summary-empty {
+      padding: 4px 0;
+      font-size: 13px;
+      color: #a4adba;
+    }
+
     /* ---------- 表单 ---------- */
     .form-group {
       display: flex;
@@ -320,63 +407,72 @@
     </div>
 
     <!-- 表单 -->
-    <div class="card">
+    <div class="card" id="formCard">
       <h3 class="card-title" id="formTitle">
         新增提醒
         <span class="tag">编辑中</span>
+        <button type="button" class="collapse-btn" data-card="formCard" aria-expanded="true">收起<span class="caret"></span></button>
       </h3>
+      <div class="card-body">
 
-      <div class="form-group">
-        <label for="name">提醒名称</label>
-        <div class="field">
-          <input id="name" type="text" placeholder="比如：喝水提醒">
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label for="cronExpr">Cron 表达式</label>
-        <div class="field">
-          <input id="cronExpr" type="text" placeholder="比如：0 */30 * * * * （每 30 分钟触发一次）">
-          <!-- 图形化 Cron 编辑器容器 -->
-          <div id="cronSelector"></div>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label for="content">提示内容</label>
-        <div class="field">
-          <textarea id="content" placeholder="该站起来喝杯水啦"></textarea>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label for="jumpUrl">点击跳转</label>
-        <div class="field">
-          <input id="jumpUrl" type="text" placeholder="https://example.com 或 D:\资料\月报.xlsx">
-          <div class="field-hint">可选：到点弹出通知后，点击气泡会用默认浏览器打开网址，或用默认程序打开本地文件 / 文件夹；留空则只关闭通知。</div>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>状态</label>
-        <div class="field">
-          <div class="check-line">
-            <input id="enabled" type="checkbox" checked>
-            <label for="enabled">启用该提醒</label>
+        <div class="form-group">
+          <label for="name">提醒名称</label>
+          <div class="field">
+            <input id="name" type="text" placeholder="比如：喝水提醒">
           </div>
         </div>
-      </div>
 
-      <div class="form-actions">
-        <button class="btn btn-primary" onclick="saveReminder()">保存提醒</button>
-        <button class="btn btn-default" id="cancelEditBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
+        <div class="form-group">
+          <label for="cronExpr">Cron 表达式</label>
+          <div class="field">
+            <input id="cronExpr" type="text" placeholder="比如：0 */30 * * * * （每 30 分钟触发一次）">
+            <!-- 图形化 Cron 编辑器容器 -->
+            <div id="cronSelector"></div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="content">提示内容</label>
+          <div class="field">
+            <textarea id="content" placeholder="该站起来喝杯水啦"></textarea>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="jumpUrl">点击跳转</label>
+          <div class="field">
+            <input id="jumpUrl" type="text" placeholder="https://example.com 或 D:\资料\月报.xlsx">
+            <div class="field-hint">可选：到点弹出通知后，点击气泡会用默认浏览器打开网址，或用默认程序打开本地文件 / 文件夹；留空则只关闭通知。</div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>状态</label>
+          <div class="field">
+            <div class="check-line">
+              <input id="enabled" type="checkbox" checked>
+              <label for="enabled">启用该提醒</label>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" onclick="saveReminder()">保存提醒</button>
+          <button class="btn btn-default" id="cancelEditBtn" style="display:none" onclick="cancelEdit()">取消编辑</button>
+        </div>
       </div>
     </div>
 
     <!-- 列表 -->
-    <div class="card">
-      <h3 class="card-title">已配置提醒列表</h3>
-      <div id="list"></div>
+    <div class="card" id="listCard">
+      <h3 class="card-title">
+        已配置提醒列表
+        <button type="button" class="collapse-btn" data-card="listCard" aria-expanded="true">收起<span class="caret"></span></button>
+      </h3>
+      <div class="card-body">
+        <div id="list"></div>
+      </div>
+      <div class="collapsed-view" id="listSummary"></div>
     </div>
 
   </div>
@@ -414,6 +510,37 @@
         .replace(/'/g, '&#39;');
     }
 
+    /* 折叠状态下展示前 5 条提醒名称 */
+    function renderListSummary(list) {
+      const box = document.getElementById('listSummary');
+      if (!box) return;
+      if (!Array.isArray(list) || list.length === 0) {
+        box.innerHTML = '<div class="summary-empty">暂无提醒配置</div>';
+        return;
+      }
+      const top = list.slice(0, 5);
+      const label = list.length > 5 ? '前 5 条' : '共 ' + list.length + ' 条';
+      let html = '<span class="summary-label">' + label + '：</span>';
+      top.forEach(function (item, index) {
+        const name = esc(item.name);
+        html += '<span class="summary-chip" title="' + name + '"><b>' + (index + 1) + '</b>' + name + '</span>';
+      });
+      if (list.length > 5) html += '<span class="summary-more">等 ' + list.length + ' 条</span>';
+      box.innerHTML = html;
+    }
+
+    /* 展开指定卡片（进入编辑时确保表单可见） */
+    function expandCard(id) {
+      const card = document.getElementById(id);
+      if (!card || !card.classList.contains('collapsed')) return;
+      card.classList.remove('collapsed');
+      const btn = card.querySelector('.collapse-btn');
+      if (btn) {
+        btn.setAttribute('aria-expanded', 'true');
+        btn.firstChild.nodeValue = '收起';
+      }
+    }
+
     /* 列表中的「点击跳转」行：网址渲染成可点击链接，本地路径仅展示 */
     function buildJumpRow(raw) {
       const url = String(raw == null ? "" : raw).trim();
@@ -434,6 +561,7 @@
       try {
         const res = await fetch('/api/reminders');
         const list = await res.json();
+        renderListSummary(list);
 
         if (!Array.isArray(list) || list.length === 0) {
           container.innerHTML = '<div class="empty">暂无提醒配置，先在上方新增一条吧~</div>';
@@ -467,6 +595,8 @@
         });
       } catch (e) {
         container.innerHTML = '<div class="empty">列表加载失败，请检查服务是否正常</div>';
+        const summaryBox = document.getElementById('listSummary');
+        if (summaryBox) summaryBox.innerHTML = '<div class="summary-empty">列表加载失败</div>';
       }
     }
 
@@ -487,6 +617,7 @@
       if (!target) return;
 
       currentEditId = target.id;
+      expandCard('formCard');
 
       const title = document.getElementById('formTitle');
       title.classList.add('is-edit');
@@ -579,6 +710,17 @@
       if (currentEditId !== null && String(currentEditId) === String(id)) cancelEdit();
       loadList();
     }
+
+    // 卡片折叠 / 展开
+    document.querySelectorAll('.collapse-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        const card = document.getElementById(btn.dataset.card);
+        if (!card) return;
+        const collapsed = card.classList.toggle('collapsed');
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        btn.firstChild.nodeValue = collapsed ? '展开' : '收起';
+      });
+    });
 
     loadList();
   </script>

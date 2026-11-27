@@ -4,12 +4,68 @@ const path = require('path');
 const { exec } = require('child_process');
 const _ = require('lodash');
 const cron = require('node-cron');
-const notifier = require('node-notifier');
+const notifierLib = require('node-notifier');
+const os = require('os');
 
-// 数据文件路径
-const DATA_PATH = path.join(__dirname, 'data', 'reminders.json');
-const CONFIG_PATH = path.join(__dirname, 'data', 'config.json');
+// 数据文件路径：打包成 exe 后 __dirname 指向只读快照，运行时数据统一放到 exe 同级目录
+const APP_DIR = process.pkg ? path.dirname(process.execPath) : __dirname;
+const DATA_PATH = path.join(APP_DIR, 'data', 'reminders.json');
+const CONFIG_PATH = path.join(APP_DIR, 'data', 'config.json');
+const ICON_PATH = path.join(APP_DIR, 'assets', 'icon.png');
 const PORT = 28765;
+
+// 图标文件存在时才传给通知器（Win7 的 notifu 对不存在的图标路径会报错）
+function getIconOption() {
+  return fs.existsSync(ICON_PATH) ? { icon: ICON_PATH } : {};
+}
+
+// Win7/更早系统走 notifu 气泡，Win8+ 走 SnoreToast
+function isLegacyWindows() {
+  if (process.platform !== 'win32') return false;
+  const parts = String(os.release()).split('.').map(Number);
+  const major = parts[0] || 0;
+  const minor = parts[1] || 0;
+  return major < 6 || (major === 6 && minor < 2);
+}
+
+// 打包成 exe 后，快照里的 notifu.exe 不能直接作为子进程执行，
+// 启动时把内置的 notifu 释放到临时目录，再通过 customPath 指给 node-notifier
+function createNotifier() {
+  if (!process.pkg || process.platform !== 'win32') return notifierLib;
+  try {
+    const fileName = os.arch() === 'x64' ? 'notifu64.exe' : 'notifu.exe';
+    const srcPath = path.join(__dirname, 'node_modules', 'node-notifier', 'vendor', 'notifu', fileName);
+    const tempDir = path.join(os.tmpdir(), 'win7-tiny-reminder-notifier');
+    const dstPath = path.join(tempDir, fileName);
+    const buf = fs.readFileSync(srcPath);
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+    if (!fs.existsSync(dstPath) || fs.statSync(dstPath).size !== buf.length) {
+      fs.writeFileSync(dstPath, buf);
+    }
+    console.log('通知组件已就绪:', dstPath);
+    const balloon = new notifierLib.WindowsBalloon({ customPath: dstPath });
+    balloon.usesBalloon = true;
+    return balloon;
+  } catch (e) {
+    console.warn('提取 notifu 失败，回退默认通知器:', e.message);
+    return notifierLib;
+  }
+}
+
+const notifier = createNotifier();
+
+// notifu 气泡必须 wait:true 等待进程退出，才能拿到“点击”结果；
+// 打包后的 exe 统一走 Balloon，不能只按 Win7 判断，否则 Win8+ 上点击事件会丢
+function applyNotifyWait(options) {
+  if (notifier.usesBalloon || isLegacyWindows()) {
+    const config = loadConfig();
+    options.wait = true;
+    options.time = (config.notificationDuration || 5) * 1000;
+  } else {
+    options.wait = false;
+  }
+  return options;
+}
 
 // 全局任务调度实例存储
 const taskMap = new Map();
@@ -26,6 +82,10 @@ function openResource(target) {
       if (process.platform === 'win32' && processedTarget.startsWith('/')) {
         processedTarget = processedTarget.slice(1);
       }
+    }
+    // 本地盘符路径统一成反斜杠（用户常填 C:/xxx，start 对正斜杠兼容性差）
+    if (process.platform === 'win32' && /^[a-zA-Z]:\//.test(processedTarget)) {
+      processedTarget = processedTarget.replace(/\//g, '\\');
     }
     // 自动判断是HTTP网址还是本地文件路径
     const isUrl = /^https?:\/\//i.test(processedTarget);
@@ -187,13 +247,15 @@ function migrateReminderFields(reminder) {
 // 执行补提醒通知
 function fireCatchupNotification(reminder, triggerTime) {
   console.log(`补提醒触发: ${reminder.name} (原定时间: ${formatTime(triggerTime)})`);
-  notifier.notify({
+  const notifyOptions = {
     title: `📌 补提醒 - ${reminder.name}`,
     message: `原定 ${formatTime(triggerTime).split(' ')[1]} 触发\n${reminder.content}`,
-    wait: false,
-    icon: path.join(__dirname, 'assets', 'icon.png')
-  }, (err, res) => {
-    if (res === 'activate' && reminder.jumpUrl) {
+    ...getIconOption()
+  };
+  applyNotifyWait(notifyOptions);
+  notifier.notify(notifyOptions, (err, res) => {
+    if ((res === 'activate' || res === 'click') && reminder.jumpUrl) {
+      console.log('通知点击，执行跳转:', reminder.jumpUrl);
       openResource(reminder.jumpUrl);
     }
   });
@@ -257,14 +319,16 @@ function startTask(reminder) {
   const task = cron.schedule(reminder.cronExpr, () => {
     const now = Date.now();
     console.log(`触发提醒: ${reminder.name}`);
-    notifier.notify({
+    const notifyOptions = {
       title: '🕒 定时提醒',
       message: reminder.content,
-      wait: false,
-      icon: path.join(__dirname, 'assets', 'icon.png')
-    }, (err, res) => {
+      ...getIconOption()
+    };
+    applyNotifyWait(notifyOptions);
+    notifier.notify(notifyOptions, (err, res) => {
       // 点击气泡时执行跳转
-      if (res === 'activate' && reminder.jumpUrl) {
+      if ((res === 'activate' || res === 'click') && reminder.jumpUrl) {
+        console.log('通知点击，执行跳转:', reminder.jumpUrl);
         openResource(reminder.jumpUrl);
       }
     });

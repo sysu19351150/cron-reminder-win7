@@ -16,13 +16,13 @@
   },
   "scripts": {
     "start": "node server.js",
-    "build": "npx pkg . --targets node16-win-x64 --output dist/reminder-server.exe",
+    "build": "pkg . --targets node16-win-x64 --output dist/reminder-server.exe",
     "test": "jest"
   },
   "pkg": {
     "assets": [
       "public/**/*",
-      "node_modules/node-notifier/vendor/notifu/notifu-x64.exe"
+      "node_modules/node-notifier/vendor/notifu/**/*"
     ],
     "scripts": [
       "server.js"
