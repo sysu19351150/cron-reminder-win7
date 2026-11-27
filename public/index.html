@@ -126,6 +126,14 @@
       color: #48576a;
     }
 
+    .field-hint {
+      margin-top: 5px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #97a3b4;
+      word-break: break-all;
+    }
+
     .check-line input[type="checkbox"] {
       width: 16px;
       height: 16px;
@@ -245,6 +253,22 @@
       word-break: break-all;
     }
 
+    /* ---------- 跳转地址 ---------- */
+    .jump-link {
+      color: #2d8cf0;
+      text-decoration: none;
+      border-bottom: 1px dashed rgba(45, 140, 240, .5);
+      word-break: break-all;
+    }
+
+    .jump-link:hover { color: #2b85e4; border-bottom-style: solid; }
+
+    .jump-local {
+      font-family: Consolas, "Courier New", monospace;
+      color: #5c6b7f;
+      word-break: break-all;
+    }
+
     .mono {
       font-family: Consolas, "Courier New", monospace;
       color: #2d8cf0;
@@ -326,6 +350,14 @@
       </div>
 
       <div class="form-group">
+        <label for="jumpUrl">点击跳转</label>
+        <div class="field">
+          <input id="jumpUrl" type="text" placeholder="https://example.com 或 D:\资料\月报.xlsx">
+          <div class="field-hint">可选：到点弹出通知后，点击气泡会用默认浏览器打开网址，或用默认程序打开本地文件 / 文件夹；留空则只关闭通知。</div>
+        </div>
+      </div>
+
+      <div class="form-group">
         <label>状态</label>
         <div class="field">
           <div class="check-line">
@@ -382,6 +414,21 @@
         .replace(/'/g, '&#39;');
     }
 
+    /* 列表中的「点击跳转」行：网址渲染成可点击链接，本地路径仅展示 */
+    function buildJumpRow(raw) {
+      const url = String(raw == null ? "" : raw).trim();
+      if (!url) return "";
+      const isWeb = /^https?:\/\//i.test(url);
+      const body = isWeb
+        ? `<a class="jump-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(url)}</a>`
+        : `<span class="jump-local">${esc(url)}</span>`;
+      return `
+        <div class="item-row">
+          <span class="k">跳转</span>
+          <span class="v">${body}</span>
+        </div>`.trim();
+    }
+
     async function loadList() {
       const container = document.getElementById('list');
       try {
@@ -410,6 +457,7 @@
               <span class="k">内容</span>
               <span class="v">${esc(item.content)}</span>
             </div>
+            ${buildJumpRow(item.jumpUrl)}
             <div class="item-actions">
               <button class="btn btn-default btn-sm" data-act="edit" data-id="${esc(item.id)}">编辑</button>
               <button class="btn btn-danger btn-sm" data-act="del" data-id="${esc(item.id)}">删除</button>
@@ -447,6 +495,7 @@
       document.getElementById('name').value = target.name;
       document.getElementById('cronExpr').value = target.cronExpr;
       document.getElementById('content').value = target.content;
+      document.getElementById('jumpUrl').value = target.jumpUrl || "";
       document.getElementById('enabled').checked = !!target.enabled;
       document.getElementById('cancelEditBtn').style.display = 'inline-block';
 
@@ -471,6 +520,7 @@
       document.getElementById('name').value = '';
       document.getElementById('cronExpr').value = '';
       document.getElementById('content').value = '';
+      document.getElementById('jumpUrl').value = '';
       document.getElementById('enabled').checked = true;
       document.getElementById('cancelEditBtn').style.display = 'none';
 
@@ -482,16 +532,29 @@
       }, 50);
     }
 
+    /* 判断跳转目标格式是否规范：网址 / file:// / 盘符路径 / UNC 路径 / 绝对路径 */
+    function isValidJumpTarget(v) {
+      return /^(https?:\/\/|file:\/\/)/i.test(v) ||
+        /^[a-zA-Z]:[\\/]/.test(v) ||
+        /^\\\\/.test(v) ||
+        /^\//.test(v);
+    }
+
     async function saveReminder() {
       const data = {
         name: document.getElementById('name').value.trim(),
         cronExpr: document.getElementById('cronExpr').value.trim(),
         content: document.getElementById('content').value.trim(),
+        jumpUrl: document.getElementById('jumpUrl').value.trim(),
         enabled: document.getElementById('enabled').checked
       };
 
       if (!data.name) { alert('请填写提醒名称'); return; }
       if (!data.cronExpr) { alert('请填写 Cron 表达式'); return; }
+      // 跳转地址轻校验：支持 http(s):// 、file:// 、盘符路径、UNC 路径，其余值提示确认
+      if (data.jumpUrl && !isValidJumpTarget(data.jumpUrl)) {
+        if (!confirm('跳转地址既不是 http/https 网址，也不是完整的本地路径，可能无法打开。仍要保存吗？')) return;
+      }
 
       // 如果是编辑模式，带上 id 字段
       if (currentEditId !== null) data.id = currentEditId;
