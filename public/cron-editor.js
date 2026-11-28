@@ -226,6 +226,8 @@
     }
 
     setPart(prefix, val, maxVal) {
+      // 周字段里 7 与 0 等价，先归一，避免 7 找不到复选框而被清成 *
+      if (prefix === 'dow') val = val.replace(/\b7\b/g, '0');
       const modeRadio = this.container.querySelector(`input[name="${prefix}-mode"][value]`);
       const allRadios = this.container.querySelectorAll(`input[name="${prefix}-mode"]`);
 
@@ -260,8 +262,9 @@
     }
 
     setValue(expr) {
-      if (!expr) expr = '0 * * * * *';
-      const parts = expr.split(' ');
+      const text = String(expr == null ? '' : expr).trim();
+      const parts = (text || '0 * * * * *').split(/\s+/);
+      if (parts.length === 5) parts.unshift('0');
       if (parts.length !== 6) return;
       this.setPart('sec', parts[0], 59);
       this.setPart('min', parts[1], 59);

@@ -19,7 +19,8 @@
     "build": "pkg . --targets node16-win-x64 --output dist/reminder-server.exe",
     "test": "jest",
     "test:config": "node test-config.js",
-    "test:config:exe": "node test-config.js --exe dist/reminder-server.exe"
+    "test:config:exe": "node test-config.js --exe dist/reminder-server.exe",
+    "test:preview": "node test-cron-preview.js"
   },
   "pkg": {
     "assets": [

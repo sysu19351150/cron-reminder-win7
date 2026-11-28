@@ -404,6 +404,99 @@
       border-radius: 6px;
     }
 
+    .cron-editor-warning {
+      display: none;
+      margin-top: 10px;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #b25c00;
+      background: #fff8e6;
+      border: 1px solid #ffe0a3;
+      border-radius: 4px;
+    }
+
+    /* ---------- Cron 触发时间预览 ---------- */
+    .cron-preview {
+      margin-top: 12px;
+      padding: 12px 14px;
+      background: #f7f9fb;
+      border: 1px solid #e3e8ee;
+      border-radius: 6px;
+    }
+
+    .cron-preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .cron-preview-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #48576a;
+    }
+
+    .cron-preview-sub {
+      font-size: 12px;
+      color: #97a3b4;
+    }
+
+    .cron-preview-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .cron-preview-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      font-size: 13px;
+      color: #48576a;
+      background: #fff;
+      border: 1px solid #e3e8ee;
+      border-radius: 4px;
+    }
+
+    .cron-preview-index {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 18px;
+      height: 18px;
+      font-size: 11px;
+      color: #2d8cf0;
+      background: #eaf4fe;
+      border-radius: 50%;
+    }
+
+    .cron-preview-when b {
+      color: #1f2d3d;
+      font-weight: 600;
+    }
+
+    .cron-preview-date {
+      font-size: 12px;
+      color: #97a3b4;
+    }
+
+    .cron-preview-tip {
+      margin-top: 6px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #97a3b4;
+    }
+
+    .cron-preview-tip:empty { display: none; }
+
+    .cron-preview-tip.err { color: #c9370b; }
+
+    .cron-preview-tip.warn { color: #ff9900; }
+
     /* ---------- 窄屏适配 ---------- */
     @media (max-width: 640px) {
       body { padding: 18px 12px 40px; }
@@ -456,6 +549,20 @@
             <input id="cronExpr" type="text" placeholder="比如：0 */30 * * * * （每 30 分钟触发一次）">
             <!-- 图形化 Cron 编辑器容器 -->
             <div id="cronSelector"></div>
+            <div class="cron-editor-warning" id="cronEditorWarning">
+              该表达式包含图形编辑器不支持的高级写法，已保留原文，请直接修改上方文本框。
+            </div>
+
+            <!-- 接下来 5 次触发时间预览 -->
+            <div class="cron-preview" id="cronPreview" aria-live="polite">
+              <div class="cron-preview-head">
+                <span class="cron-preview-title">接下来 5 次触发时间</span>
+                <span class="cron-preview-sub">随配置实时计算</span>
+              </div>
+              <div class="cron-preview-list" id="cronPreviewList"></div>
+              <div class="cron-preview-tip" id="cronPreviewTip"></div>
+            </div>
+
           </div>
         </div>
 
@@ -509,23 +616,297 @@
     let currentEditId = null; // 标记当前是否处于编辑模式
     let cronEditor = null; // 图形化编辑器实例
 
-    // 页面加载完成后初始化图形化 Cron 编辑器
+    /* ---------- Cron 未来触发时间预览 ---------- */
+
+    /* CRON_PREVIEW_START */
+    var CronPreview = (function () {
+      const FIELD_DEFS = [
+        { key: 'second', label: '秒', min: 0, max: 59 },
+        { key: 'minute', label: '分', min: 0, max: 59 },
+        { key: 'hour', label: '时', min: 0, max: 23 },
+        { key: 'dayOfMonth', label: '日', min: 1, max: 31 },
+        { key: 'month', label: '月', min: 1, max: 12 },
+        { key: 'dayOfWeek', label: '周', min: 0, max: 7, starMax: 6 }
+      ];
+
+      const MONTH_NAMES = {
+        january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3, april: 4, apr: 4,
+        may: 5, june: 6, jun: 6, july: 7, jul: 7, august: 8, aug: 8,
+        september: 9, sep: 9, october: 10, oct: 10, november: 11, nov: 11, december: 12, dec: 12
+      };
+
+      const DOW_NAMES = {
+        sunday: 0, sun: 0, monday: 1, mon: 1, tuesday: 2, tue: 2,
+        wednesday: 3, wed: 3, thursday: 4, thu: 4, friday: 5, fri: 5, saturday: 6, sat: 6
+      };
+
+      function replaceNames(text, map) {
+        Object.keys(map).sort(function (a, b) { return b.length - a.length; }).forEach(function (name) {
+          text = text.replace(new RegExp('\\b' + name + '\\b', 'gi'), String(map[name]));
+        });
+        return text;
+      }
+
+      function expandRange(match, startText, endText) {
+        let start = parseInt(startText, 10);
+        let end = parseInt(endText, 10);
+        if (start > end) { const tmp = start; start = end; end = tmp; }
+        const values = [];
+        for (let v = start; v <= end; v++) values.push(v);
+        return values.join(',');
+      }
+
+      function parseField(raw, def) {
+        if (raw == null || String(raw).trim() === '') throw new Error(def.label + '字段为空');
+        let text = String(raw).trim().toLowerCase();
+
+        if (def.key === 'month') text = replaceNames(text, MONTH_NAMES);
+        if (def.key === 'dayOfWeek') {
+          text = replaceNames(text, DOW_NAMES);
+          // 与 node-cron 保持一致：周日的 7 先归一成 0，再展开区间
+          text = text.replace(/\b7\b/g, '0');
+        }
+
+        const starMax = def.starMax == null ? def.max : def.starMax;
+        text = text.replace(/\*/g, def.min + '-' + starMax);
+        text = text.replace(/(\d+)-(\d+)/g, expandRange);
+
+        const stepMatch = /^(.+)\/(\d+)$/.exec(text);
+        if (stepMatch) {
+          const step = parseInt(stepMatch[2], 10);
+          if (step < 1) throw new Error(def.label + '字段的步长必须大于 0');
+          // node-cron 的步长语义：保留能被步长整除的值（与实际调度一致）
+          const kept = stepMatch[1].split(',').map(function (item) {
+            return parseInt(item, 10);
+          }).filter(function (value) {
+            return !isNaN(value) && value % step === 0;
+          });
+          if (!kept.length) throw new Error(def.label + '字段的步长没有匹配到任何值');
+          text = kept.join(',');
+        }
+
+        const values = [];
+        text.split(',').forEach(function (part) {
+          const item = part.trim();
+          if (!/^\d+$/.test(item)) throw new Error(def.label + '字段包含无法识别的内容：' + part);
+          let value = parseInt(item, 10);
+          if (value < def.min || value > def.max) {
+            throw new Error(def.label + '字段取值超出范围（' + def.min + '-' + def.max + '）：' + value);
+          }
+          if (def.key === 'dayOfWeek' && value === 7) value = 0;
+          if (values.indexOf(value) === -1) values.push(value);
+        });
+
+        if (!values.length) throw new Error(def.label + '字段没有有效取值');
+        values.sort(function (a, b) { return a - b; });
+        return values;
+      }
+
+      function parse(expression) {
+        const normalized = String(expression == null ? '' : expression).trim().replace(/\s+/g, ' ');
+        if (!normalized) throw new Error('表达式为空');
+        const parts = normalized.split(' ');
+        if (parts.length === 5) parts.unshift('0');
+        if (parts.length !== 6) throw new Error('需要 5 段或 6 段表达式，当前为 ' + parts.length + ' 段');
+        return {
+          second: parseField(parts[0], FIELD_DEFS[0]),
+          minute: parseField(parts[1], FIELD_DEFS[1]),
+          hour: parseField(parts[2], FIELD_DEFS[2]),
+          dayOfMonth: parseField(parts[3], FIELD_DEFS[3]),
+          month: parseField(parts[4], FIELD_DEFS[4]),
+          dayOfWeek: parseField(parts[5], FIELD_DEFS[5])
+        };
+      }
+
+      function next(expression, count, baseDate) {
+        const cron = parse(expression);
+        const limit = Math.max(1, Math.round(count || 5));
+        const now = baseDate && typeof baseDate.getTime === 'function' ? new Date(baseDate.getTime()) : new Date();
+        const result = [];
+        const cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const maxDays = 366 * 50; // 最多向后找 50 年，覆盖 2 月 29 日等稀有组合
+
+        for (let dayIndex = 0; dayIndex < maxDays && result.length < limit; dayIndex++) {
+          const month = cursor.getMonth() + 1;
+          const day = cursor.getDate();
+          const weekDay = cursor.getDay();
+
+          if (cron.month.indexOf(month) !== -1 &&
+              cron.dayOfMonth.indexOf(day) !== -1 &&
+              cron.dayOfWeek.indexOf(weekDay) !== -1) {
+            const year = cursor.getFullYear();
+            for (let hi = 0; hi < cron.hour.length; hi++) {
+              for (let mi = 0; mi < cron.minute.length; mi++) {
+                for (let si = 0; si < cron.second.length; si++) {
+                  const hh = cron.hour[hi];
+                  const mm = cron.minute[mi];
+                  const ss = cron.second[si];
+                  const time = new Date(year, month - 1, day, hh, mm, ss, 0);
+                  // 夏令时切换等情况下时间可能被归一化，跳过无效组合
+                  if (time.getDate() !== day || time.getHours() !== hh ||
+                      time.getMinutes() !== mm || time.getSeconds() !== ss) continue;
+                  if (time.getTime() <= now.getTime()) continue;
+                  result.push(time);
+                  if (result.length >= limit) return result;
+                }
+              }
+            }
+          }
+          cursor.setDate(cursor.getDate() + 1);
+        }
+        return result;
+      }
+
+      return { parse: parse, next: next };
+    })();
+    /* CRON_PREVIEW_END */
+
+    const PREVIEW_COUNT = 5;
+    const WEEK_CN = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+
+    function pad2(n) {
+      return n < 10 ? '0' + n : String(n);
+    }
+
+    function formatPreviewDate(date, now) {
+      const dayStart = d => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const dayDiff = Math.round((dayStart(date) - dayStart(now)) / 86400000);
+      const time = pad2(date.getHours()) + ':' + pad2(date.getMinutes()) + ':' + pad2(date.getSeconds());
+      const dateFull = date.getFullYear() + '-' + pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()) + ' ' + WEEK_CN[date.getDay()];
+      let label;
+      if (dayDiff === 0) label = '今天';
+      else if (dayDiff === 1) label = '明天';
+      else if (dayDiff === 2) label = '后天';
+      else label = (date.getMonth() + 1) + '月' + date.getDate() + '日';
+      const dateShort = (date.getFullYear() === now.getFullYear() ? '' : date.getFullYear() + '-') +
+        pad2(date.getMonth() + 1) + '-' + pad2(date.getDate()) + ' ' + WEEK_CN[date.getDay()];
+      return {
+        label: label,
+        time: time,
+        date: dateShort,
+        full: dateFull + ' ' + time
+      };
+    }
+
+    function updateCronPreview(expression) {
+      const listBox = document.getElementById('cronPreviewList');
+      const tipBox = document.getElementById('cronPreviewTip');
+      if (!listBox || !tipBox) return;
+
+      const raw = String(expression == null ? '' : expression).trim();
+      listBox.innerHTML = '';
+      tipBox.className = 'cron-preview-tip';
+
+      if (!raw) {
+        tipBox.textContent = '填写完整的 Cron 表达式后，这里会显示接下来 5 次触发时间。';
+        return;
+      }
+
+      let dates;
+      try {
+        dates = CronPreview.next(raw, PREVIEW_COUNT);
+      } catch (e) {
+        tipBox.className = 'cron-preview-tip err';
+        tipBox.textContent = '表达式无法解析：' + (e && e.message ? e.message : '未知错误');
+        return;
+      }
+
+      if (!dates.length) {
+        tipBox.className = 'cron-preview-tip warn';
+        tipBox.textContent = '未来 50 年内没有匹配的触发时间，请检查「日 / 月 / 周」的组合。';
+        return;
+      }
+
+      const now = new Date();
+      listBox.innerHTML = dates.map(function (date, index) {
+        const info = formatPreviewDate(date, now);
+        return '<span class="cron-preview-item" title="' + esc(info.full) + '">' +
+          '<span class="cron-preview-index">' + (index + 1) + '</span>' +
+          '<span class="cron-preview-when">' + esc(info.label) + ' <b>' + esc(info.time) + '</b></span>' +
+          '<span class="cron-preview-date">' + esc(info.date) + '</span>' +
+          '</span>';
+      }).join('');
+
+      if (dates.length < PREVIEW_COUNT) {
+        tipBox.className = 'cron-preview-tip warn';
+        tipBox.textContent = '未来 50 年内只找到 ' + dates.length + ' 次触发，该规则比较少见。';
+      }
+    }
+
+    /* 判断表达式能否无损回填到图形化编辑器；不能时只保留文本框，避免被归一化成错误规则 */
+    function canEditorRepresent(expression) {
+      const text = String(expression == null ? '' : expression).trim().replace(/\s+/g, ' ');
+      if (!text) return true;
+      const parts = text.split(' ');
+      if (parts.length === 5) parts.unshift('0');
+      if (parts.length !== 6) return false;
+      try {
+        CronPreview.parse(text);
+      } catch (e) {
+        return false;
+      }
+      const generic = /^(\*|\*\/\d+|\d+-\d+|\d+(,\d+)*)$/;
+      const dow = /^(\*|\d+(,\d+)*)$/;
+      for (let i = 0; i < parts.length; i++) {
+        if (i === 5 ? !dow.test(parts[i]) : !generic.test(parts[i])) return false;
+      }
+      return true;
+    }
+
+    function setEditorWarning(show) {
+      const box = document.getElementById('cronEditorWarning');
+      if (box) box.style.display = show ? 'block' : 'none';
+      // 表达式无法无损回填时把图形编辑器整体收起，避免面板和文本框各说各话
+      const editor = document.getElementById('cronSelector');
+      if (editor) editor.style.display = show ? 'none' : '';
+    }
+
+    // 页面加载完成后初始化图形化 Cron 编辑器与触发时间预览
     document.addEventListener('DOMContentLoaded', function() {
       const container = document.getElementById('cronSelector');
       cronEditor = new CronEditor(container, {
         initial: '0 * * * * *',
         onChange: function() {
-          // 编辑器变化时自动同步到文本输入框
-          document.getElementById('cronExpr').value = this.getValue();
+          // 编辑器变化时自动同步到文本输入框，并刷新触发预览
+          const expr = this.getValue();
+          document.getElementById('cronExpr').value = expr;
+          setEditorWarning(false);
+          updateCronPreview(expr);
         }
       });
 
-      // 文本框手动输入时同步到图形化编辑器
-      document.getElementById('cronExpr').addEventListener('change', function() {
-        if (cronEditor) {
-          cronEditor.setValue(this.value);
+      const cronInput = document.getElementById('cronExpr');
+      let previewTimer = null;
+
+      // 手动输入时先防抖刷新预览，不打断输入
+      cronInput.addEventListener('input', function() {
+        const value = this.value;
+        if (previewTimer) clearTimeout(previewTimer);
+        previewTimer = setTimeout(function() {
+          updateCronPreview(value);
+        }, 200);
+      });
+
+      // 失焦 / 回车时再同步回图形化编辑器
+      cronInput.addEventListener('change', function() {
+        if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+        const value = this.value;
+        const friendly = canEditorRepresent(value);
+        setEditorWarning(!friendly && value.trim() !== '');
+        if (cronEditor && friendly) {
+          cronEditor.setValue(value);
+        } else {
+          updateCronPreview(value);
         }
       });
+
+      updateCronPreview(cronInput.value || '0 * * * * *');
+
+      // 页面长时间打开时定时刷新，避免相对时间（今天/明天）过期
+      setInterval(function() {
+        const input = document.getElementById('cronExpr');
+        if (input) updateCronPreview(input.value);
+      }, 30000);
     });
 
     /* HTML 转义，防止内容破坏结构 */
@@ -653,17 +1034,21 @@
 
       document.getElementById('name').value = target.name;
       document.getElementById('cronExpr').value = target.cronExpr;
+      updateCronPreview(target.cronExpr);
       document.getElementById('content').value = target.content;
       document.getElementById('jumpUrl').value = target.jumpUrl || "";
       document.getElementById('enabled').checked = !!target.enabled;
       document.getElementById('cancelEditBtn').style.display = 'inline-block';
 
-      // 同步回填到图形化编辑器
-      setTimeout(() => {
-        if (cronEditor) {
-          cronEditor.setValue(target.cronExpr);
-        }
-      }, 50);
+      // 同步回填到图形化编辑器；高级写法只保留在文本框里，避免被错误归一化
+      if (cronEditor && canEditorRepresent(target.cronExpr)) {
+        setEditorWarning(false);
+        setTimeout(() => {
+          if (cronEditor) cronEditor.setValue(target.cronExpr);
+        }, 50);
+      } else {
+        setEditorWarning(true);
+      }
 
       window.scrollTo({ top: 0, behavior: 'smooth' });
     }
@@ -682,6 +1067,7 @@
       document.getElementById('jumpUrl').value = '';
       document.getElementById('enabled').checked = true;
       document.getElementById('cancelEditBtn').style.display = 'none';
+      setEditorWarning(false);
 
       // 清空图形化编辑器
       setTimeout(() => {
@@ -710,6 +1096,12 @@
 
       if (!data.name) { alert('请填写提醒名称'); return; }
       if (!data.cronExpr) { alert('请填写 Cron 表达式'); return; }
+      try {
+        CronPreview.parse(data.cronExpr);
+      } catch (e) {
+        alert('Cron 表达式不合法：' + e.message);
+        return;
+      }
       // 跳转地址轻校验：支持 http(s):// 、file:// 、盘符路径、UNC 路径，其余值提示确认
       if (data.jumpUrl && !isValidJumpTarget(data.jumpUrl)) {
         if (!confirm('跳转地址既不是 http/https 网址，也不是完整的本地路径，可能无法打开。仍要保存吗？')) return;
