@@ -435,11 +435,11 @@
     </div>
 
     <!-- 表单 -->
-    <div class="card" id="formCard">
+    <div class="card collapsed" id="formCard">
       <h3 class="card-title" id="formTitle">
         新增提醒
         <span class="tag">编辑中</span>
-        <button type="button" class="collapse-btn" data-card="formCard" aria-expanded="true">收起<span class="caret"></span></button>
+        <button type="button" class="collapse-btn" data-card="formCard" aria-expanded="false">展开<span class="caret"></span></button>
       </h3>
       <div class="card-body">
 
@@ -739,16 +739,33 @@
       loadList();
     }
 
-    // 卡片折叠 / 展开
-    document.querySelectorAll('.collapse-btn').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        const card = document.getElementById(btn.dataset.card);
-        if (!card) return;
-        const collapsed = card.classList.toggle('collapsed');
-        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-        btn.firstChild.nodeValue = collapsed ? '展开' : '收起';
-      });
-    });
+    // 卡片折叠 / 展开（标题或按钮点击均可）
+function toggleCard(card) {
+  if (!card) return;
+  const collapsed = card.classList.toggle('collapsed');
+  const btn = card.querySelector('.collapse-btn');
+  if (btn) {
+    btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    btn.firstChild.nodeValue = collapsed ? '展开' : '收起';
+  }
+}
+
+document.querySelectorAll('.card-title').forEach(function (title) {
+  title.style.cursor = 'pointer'; // 可选：鼠标手势提示可点击
+  title.addEventListener('click', function (e) {
+    // 点在按钮上时交给按钮自己处理，避免 toggle 两次
+    if (e.target.closest('button')) return;
+    const card = title.closest('.card');
+    toggleCard(card);
+  });
+});
+
+document.querySelectorAll('.collapse-btn').forEach(function (btn) {
+  btn.addEventListener('click', function (e) {
+    e.stopPropagation(); // 阻止冒泡到标题，避免重复
+    toggleCard(document.getElementById(btn.dataset.card));
+  });
+});
 
     loadList();
   </script>
