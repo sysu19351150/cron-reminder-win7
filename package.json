@@ -17,7 +17,9 @@
   "scripts": {
     "start": "node server.js",
     "build": "pkg . --targets node16-win-x64 --output dist/reminder-server.exe",
-    "test": "jest"
+    "test": "jest",
+    "test:config": "node test-config.js",
+    "test:config:exe": "node test-config.js --exe dist/reminder-server.exe"
   },
   "pkg": {
     "assets": [

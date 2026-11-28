@@ -32,10 +32,35 @@
       border-left: 4px solid #2d8cf0;
     }
 
+    .page-head-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
     .page-desc {
       margin: 6px 0 0 16px;
       font-size: 13px;
       color: #8a94a6;
+    }
+
+    .head-link {
+      flex: none;
+      padding: 5px 14px;
+      font-size: 13px;
+      color: #2d8cf0;
+      text-decoration: none;
+      background: #fff;
+      border: 1px solid #bfdcfb;
+      border-radius: 4px;
+      transition: background-color .15s, border-color .15s;
+    }
+
+    .head-link:hover { background: #eaf4fe; border-color: #2d8cf0; }
+
+    @media (max-width: 640px) {
+      .page-head-bar { flex-direction: column; align-items: flex-start; gap: 10px; }
     }
 
     /* ---------- 卡片 ---------- */
@@ -403,7 +428,10 @@
 
     <div class="page-head">
       <h1 class="page-title">定时提醒配置</h1>
-      <p class="page-desc">配置 Cron 表达式，到点自动推送提醒内容</p>
+      <div class="page-head-bar">
+        <p class="page-desc">配置 Cron 表达式，到点自动推送提醒内容</p>
+        <a class="head-link" href="/config">全局设置 →</a>
+      </div>
     </div>
 
     <!-- 表单 -->

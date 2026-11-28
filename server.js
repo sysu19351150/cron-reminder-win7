@@ -1,18 +1,39 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
+const { exec, execSync } = require('child_process');
 const _ = require('lodash');
 const cron = require('node-cron');
 const notifierLib = require('node-notifier');
 const os = require('os');
 
 // 数据文件路径：打包成 exe 后 __dirname 指向只读快照，运行时数据统一放到 exe 同级目录
+// REMINDER_DATA_DIR 仅用于自动化测试时把数据隔离到临时目录
 const APP_DIR = process.pkg ? path.dirname(process.execPath) : __dirname;
-const DATA_PATH = path.join(APP_DIR, 'data', 'reminders.json');
-const CONFIG_PATH = path.join(APP_DIR, 'data', 'config.json');
+const DATA_DIR = process.env.REMINDER_DATA_DIR
+  ? path.resolve(process.env.REMINDER_DATA_DIR)
+  : path.join(APP_DIR, 'data');
+const DATA_PATH = path.join(DATA_DIR, 'reminders.json');
+const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
 const ICON_PATH = path.join(APP_DIR, 'assets', 'icon.png');
-const PORT = 28765;
+const DEFAULT_PORT = 28765;
+
+// 全局配置默认值：新增字段时同步补到这里
+const DEFAULT_CONFIG = {
+  muted: false,
+  notificationDuration: 5,
+  maxCatchupHours: 48,
+  webPort: DEFAULT_PORT,
+  autoStart: false,
+  enableCatchupCheck: true
+};
+
+// 数值型配置的取值范围，前端配置页与后端校验共用同一套口径
+const CONFIG_LIMITS = {
+  notificationDuration: { min: 1, max: 60 },
+  maxCatchupHours: { min: 1, max: 168 },
+  webPort: { min: 1024, max: 65535 }
+};
 
 // 图标文件存在时才传给通知器（Win7 的 notifu 对不存在的图标路径会报错）
 function getIconOption() {
@@ -65,6 +86,23 @@ function applyNotifyWait(options) {
     options.wait = false;
   }
   return options;
+}
+
+// 统一的“发通知”出口：静音开关在这里生效，同时负责点击跳转
+function notifyUser(options, jumpUrl) {
+  const config = loadConfig();
+  if (config.muted) {
+    console.log(`[静音] 已跳过通知: ${options.title} - ${options.message}`);
+    return false;
+  }
+  applyNotifyWait(options);
+  notifier.notify(options, (err, res) => {
+    if ((res === 'activate' || res === 'click') && jumpUrl) {
+      console.log('通知点击，执行跳转:', jumpUrl);
+      openResource(jumpUrl);
+    }
+  });
+  return true;
 }
 
 // 全局任务调度实例存储
@@ -158,20 +196,19 @@ function timeMatchesCron(date, cronConfig) {
          matchPart(dow, cronConfig.dayOfWeek);
 }
 
-// 回溯查找[fromTime, toTime)区间内所有匹配cron的触发点
+// 回溯查找 (fromTime, toTime) 区间内所有匹配 cron 的触发点
+// 起点是开区间：fromTime 这一秒正是“上一次已经触发过”的时刻，再算进来就会重复补发
 function findMissedTriggerPoints(cronExpr, fromTime, toTime) {
   const cronConfig = parseCronExpr(cronExpr);
   if (!cronConfig) return [];
   const points = [];
   // 按秒遍历，最大回溯窗口限制为7天避免性能问题
   const maxWindow = 7 * 24 * 3600 * 1000;
-  const startTime = Math.max(fromTime, toTime - maxWindow);
-  let t = startTime;
+  const earliest = Math.max(fromTime + 1000, toTime - maxWindow);
+  // 对齐到整秒，避免起点带毫秒导致逐秒步进错位
+  let t = Math.ceil(earliest / 1000) * 1000;
   while (t < toTime) {
-    const d = new Date(t);
-    if (timeMatchesCron(d, cronConfig)) {
-      points.push(t);
-    }
+    if (timeMatchesCron(new Date(t), cronConfig)) points.push(t);
     t += 1000;
   }
   return points;
@@ -184,15 +221,7 @@ function initDataStore() {
   if (!fs.existsSync(DATA_PATH)) fs.writeFileSync(DATA_PATH, JSON.stringify([], null, 2));
   // 初始化全局配置文件，默认开启补提醒功能
   if (!fs.existsSync(CONFIG_PATH)) {
-    const defaultConfig = {
-      muted: false,
-      notificationDuration: 5,
-      maxCatchupHours: 48,
-      webPort: 28765,
-      autoStart: false,
-      enableCatchupCheck: true
-    };
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaultConfig, null, 2));
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2));
   }
 }
 
@@ -210,22 +239,149 @@ function saveConfig(config) {
   fs.renameSync(tempPath, CONFIG_PATH);
 }
 
+// 布尔值宽松解析：字符串 "false" 不能被当成 true
+function toBool(value) {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const v = value.trim().toLowerCase();
+    return v === 'true' || v === '1' || v === 'yes' || v === 'on';
+  }
+  return false;
+}
+
+// 数字取值收敛：超出范围就夹到边界，非数字回落到默认值
+function clampNumber(value, limits, defaultValue) {
+  const n = Number(value);
+  if (!isFinite(n)) return defaultValue;
+  const rounded = Math.round(n);
+  if (rounded < limits.min) return limits.min;
+  if (rounded > limits.max) return limits.max;
+  return rounded;
+}
+
+// 配置归一化：无论文件里是什么脏数据，读出/写入前都收敛成合法结构
+function normalizeConfig(input, base) {
+  const src = input && typeof input === 'object' ? input : {};
+  const merged = Object.assign({}, base || DEFAULT_CONFIG);
+  if ('muted' in src) merged.muted = toBool(src.muted);
+  if ('enableCatchupCheck' in src) merged.enableCatchupCheck = toBool(src.enableCatchupCheck);
+  if ('autoStart' in src) merged.autoStart = toBool(src.autoStart);
+  if ('notificationDuration' in src) {
+    merged.notificationDuration = clampNumber(src.notificationDuration, CONFIG_LIMITS.notificationDuration, DEFAULT_CONFIG.notificationDuration);
+  }
+  if ('maxCatchupHours' in src) {
+    merged.maxCatchupHours = clampNumber(src.maxCatchupHours, CONFIG_LIMITS.maxCatchupHours, DEFAULT_CONFIG.maxCatchupHours);
+  }
+  if ('webPort' in src) {
+    merged.webPort = clampNumber(src.webPort, CONFIG_LIMITS.webPort, DEFAULT_CONFIG.webPort);
+  }
+  return merged;
+}
+
 // 读取全局配置，自动补全缺失字段
 function loadConfig() {
-  let config;
+  let raw;
   try {
-    config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
+    raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf-8'));
   } catch (e) {
-    config = {};
+    raw = {};
   }
-  // 字段兼容补全
-  if (typeof config.enableCatchupCheck !== 'boolean') config.enableCatchupCheck = true;
-  if (typeof config.muted !== 'boolean') config.muted = false;
-  if (typeof config.notificationDuration !== 'number') config.notificationDuration = 5;
-  if (typeof config.maxCatchupHours !== 'number') config.maxCatchupHours = 48;
-  if (typeof config.webPort !== 'number') config.webPort = 28765;
-  if (typeof config.autoStart !== 'boolean') config.autoStart = false;
-  return config;
+  return normalizeConfig(raw, DEFAULT_CONFIG);
+}
+
+/* ---------------- 开机自启（写 HKCU Run 项） ---------------- */
+
+const AUTOSTART_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+const AUTOSTART_VALUE_NAME = 'Win7TinyReminder';
+
+// 启动命令：打包后直接指向 exe；开发模式下带上 server.js
+// 路径含空格时必须加引号，否则 Windows 无法解析
+function buildAutostartCommand() {
+  const exePath = process.execPath;
+  const quote = p => (/\s/.test(p) ? `"${p}"` : p);
+  if (process.pkg) return quote(exePath);
+  return `${quote(exePath)} "${path.join(__dirname, 'server.js')}"`;
+}
+
+// 读取注册表里实际存的自启命令（未写入返回空串）
+function readAutoStartValue() {
+  if (process.platform !== 'win32') return '';
+  try {
+    const out = execSync(`reg query "${AUTOSTART_KEY}" /v ${AUTOSTART_VALUE_NAME}`, {
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).toString();
+    const line = out.split(/\r?\n/).find(l => l.indexOf(AUTOSTART_VALUE_NAME) !== -1);
+    if (!line) return '';
+    const parts = line.split('REG_SZ');
+    return parts.length > 1 ? parts[1].trim() : '';
+  } catch (e) {
+    return '';
+  }
+}
+
+// 查询注册表当前是否已写入自启项
+function isAutoStartEnabled() {
+  return readAutoStartValue() !== '';
+}
+
+/* reg.exe 的 /d 参数不接受内嵌引号，改为写临时 .reg 文件再 reg import，
+   这样路径里的引号与反斜杠都能原样保留 */
+function writeAutoStartValue(command) {
+  const regPath = path.join(os.tmpdir(), 'win7-tiny-reminder-autostart.reg');
+  const escaped = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const content = [
+    'Windows Registry Editor Version 5.00',
+    '',
+    '[HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run]',
+    `"${AUTOSTART_VALUE_NAME}"="${escaped}"`
+  ].join('\r\n') + '\r\n';
+  // reg import 只认 ANSI 或 UTF-16LE，用 UTF-16LE 保证中文路径也不乱码
+  fs.writeFileSync(regPath, Buffer.from('\ufeff' + content, 'utf16le'));
+  execSync(`reg import "${regPath}"`, { stdio: 'ignore' });
+  fs.unlinkSync(regPath);
+}
+
+// 删除自启项：不存在时 reg 会返回错误，这里不用错误信息判断（不同系统语言提示不同），
+// 统一以“删完后回读为空”作为成功标准
+function removeAutoStartValue() {
+  try {
+    execSync(`reg delete "${AUTOSTART_KEY}" /v ${AUTOSTART_VALUE_NAME} /f`, { stdio: 'ignore' });
+  } catch (e) {
+    // 忽略：多半是本机本来就没有这一项
+  }
+}
+
+// 应用自启开关：true 写注册表，false 删除
+function applyAutoStart(enabled) {
+  if (process.platform !== 'win32') {
+    return { ok: false, reason: '当前系统不支持开机自启' };
+  }
+  if (process.env.REMINDER_NO_AUTOSTART === '1') {
+    return { ok: true, skipped: true };
+  }
+  try {
+    if (enabled) {
+      const expected = buildAutostartCommand();
+      writeAutoStartValue(expected);
+      // 回读校验，避免注册表写进去了但值不对
+      const actual = readAutoStartValue();
+      if (actual !== expected) {
+        return { ok: false, reason: '注册表回读值与预期不一致: ' + actual };
+      }
+    } else {
+      // 本来就没写自启项时不必调用 reg delete（一次 reg 调用要花 1 秒以上，会拖慢启动）
+      if (!isAutoStartEnabled()) return { ok: true, enabled: false };
+      removeAutoStartValue();
+      if (isAutoStartEnabled()) {
+        return { ok: false, reason: '注册表自启项未能移除' };
+      }
+    }
+    return { ok: true, enabled: isAutoStartEnabled() };
+  } catch (e) {
+    console.warn('设置开机自启失败:', e.message);
+    return { ok: false, reason: e.message };
+  }
 }
 
 // 数据兼容：给旧数据补全缺失的lastFiredTimestamp、lastCatchupTimestamp和jumpUrl字段
@@ -247,18 +403,11 @@ function migrateReminderFields(reminder) {
 // 执行补提醒通知
 function fireCatchupNotification(reminder, triggerTime) {
   console.log(`补提醒触发: ${reminder.name} (原定时间: ${formatTime(triggerTime)})`);
-  const notifyOptions = {
+  notifyUser({
     title: `📌 补提醒 - ${reminder.name}`,
     message: `原定 ${formatTime(triggerTime).split(' ')[1]} 触发\n${reminder.content}`,
     ...getIconOption()
-  };
-  applyNotifyWait(notifyOptions);
-  notifier.notify(notifyOptions, (err, res) => {
-    if ((res === 'activate' || res === 'click') && reminder.jumpUrl) {
-      console.log('通知点击，执行跳转:', reminder.jumpUrl);
-      openResource(reminder.jumpUrl);
-    }
-  });
+  }, reminder.jumpUrl);
 }
 
 // 启动前执行回溯检查，处理所有错过的提醒
@@ -273,23 +422,38 @@ function runCatchupCheck() {
   const reminders = JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8')).map(migrateReminderFields);
   const now = Date.now();
   const maxCatchupWindow = config.maxCatchupHours * 3600 * 1000;
+  // 当前这一秒留给 cron 自己触发，补提醒只处理更早的时间点
+  const scanEnd = Math.floor(now / 1000) * 1000;
+  const windowStart = now - maxCatchupWindow;
   let hasChanges = false;
 
   reminders.forEach(reminder => {
     if (!reminder.enabled) return;
-    // 回溯起点取 lastCatchupTimestamp 和 lastFiredTimestamp 的较大值
-    const fromTime = Math.max(reminder.lastCatchupTimestamp, reminder.lastFiredTimestamp);
-    if (fromTime >= now) return;
-    // 超过最大回溯时长的直接跳过
-    if (now - fromTime > maxCatchupWindow) return;
 
-    const missedPoints = findMissedTriggerPoints(reminder.cronExpr, fromTime, now);
+    // 回溯起点取上次实际触发和上次补提醒的较大值
+    let anchor = Math.max(reminder.lastCatchupTimestamp || 0, reminder.lastFiredTimestamp || 0);
+
+    // 没有可信基准（老数据缺字段、时间戳异常）：对齐到当前，不做回溯，避免一启动就补一堆旧提醒
+    if (anchor <= 0 || anchor > now) {
+      reminder.lastFiredTimestamp = now;
+      reminder.lastCatchupTimestamp = now;
+      hasChanges = true;
+      return;
+    }
+
+    // 刚刚触发过，当前秒之后交给定时任务，没有可补的点
+    if (anchor >= scanEnd) return;
+
+    // 只回溯到最大回溯窗口：更早的点不补，但窗口内的点仍要补，不能整条跳过
+    if (anchor < windowStart) anchor = windowStart;
+
+    const missedPoints = findMissedTriggerPoints(reminder.cronExpr, anchor, scanEnd);
     if (missedPoints.length === 0) return;
 
     // 只处理最后一个错过的触发点，避免一次性弹出大量通知打扰用户
     const lastMissed = missedPoints[missedPoints.length - 1];
     fireCatchupNotification(reminder, lastMissed);
-    // 更新补提醒时间戳
+    // 补过就把基准推进到该点，下次启动不会再补同一秒
     reminder.lastCatchupTimestamp = lastMissed;
     hasChanges = true;
   });
@@ -319,19 +483,11 @@ function startTask(reminder) {
   const task = cron.schedule(reminder.cronExpr, () => {
     const now = Date.now();
     console.log(`触发提醒: ${reminder.name}`);
-    const notifyOptions = {
+    notifyUser({
       title: '🕒 定时提醒',
       message: reminder.content,
       ...getIconOption()
-    };
-    applyNotifyWait(notifyOptions);
-    notifier.notify(notifyOptions, (err, res) => {
-      // 点击气泡时执行跳转
-      if ((res === 'activate' || res === 'click') && reminder.jumpUrl) {
-        console.log('通知点击，执行跳转:', reminder.jumpUrl);
-        openResource(reminder.jumpUrl);
-      }
-    });
+    }, reminder.jumpUrl);
     // 更新最后触发时间戳并持久化
     const list = JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8')).map(migrateReminderFields);
     const idx = _.findIndex(list, { id: reminder.id });
@@ -351,8 +507,31 @@ function stopTask(id) {
   }
 }
 
-// 简单CORS处理 + 静态文件服务
-const server = http.createServer((req, res) => {
+/* ---------------- HTTP 服务 ---------------- */
+
+// 响应 JSON 的简写
+function sendJson(res, payload, statusCode) {
+  res.statusCode = statusCode || 200;
+  res.setHeader('Content-Type', 'application/json;charset=utf-8');
+  res.end(JSON.stringify(payload));
+}
+
+// 静态文件 MIME
+function contentTypeOf(ext) {
+  return {
+    '.css': 'text/css',
+    '.js': 'application/javascript',
+    '.html': 'text/html;charset=utf-8',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.gif': 'image/gif'
+  }[ext] || 'application/octet-stream';
+}
+
+let activePort = 0;
+let server = null;
+
+function handleRequest(req, res) {
   // 允许跨域
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
@@ -367,19 +546,18 @@ const server = http.createServer((req, res) => {
     return res.end(html);
   }
 
+  // 全局设置页面路由
+  if (req.url === '/config' || req.url.startsWith('/config.html')) {
+    const html = fs.readFileSync(path.join(__dirname, 'public', 'config.html'));
+    res.setHeader('Content-Type', 'text/html;charset=utf-8');
+    return res.end(html);
+  }
+
   // 提供node_modules下的静态资源访问
   if (req.url.startsWith('/node_modules/')) {
     const filePath = path.join(__dirname, req.url);
     if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
-      const ext = path.extname(filePath);
-      const contentType = {
-        '.css': 'text/css',
-        '.js': 'application/javascript',
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.gif': 'image/gif'
-      }[ext] || 'application/octet-stream';
-      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Type', contentTypeOf(path.extname(filePath)));
       return fs.createReadStream(filePath).pipe(res);
     }
   }
@@ -388,24 +566,27 @@ const server = http.createServer((req, res) => {
   if (req.url.startsWith('/')) {
     const publicPath = path.join(__dirname, 'public', req.url);
     if (fs.existsSync(publicPath) && fs.statSync(publicPath).isFile()) {
-      const ext = path.extname(publicPath);
-      const contentType = {
-        '.css': 'text/css',
-        '.js': 'application/javascript',
-        '.png': 'image/png',
-        '.jpg': 'image/jpeg',
-        '.gif': 'image/gif'
-      }[ext] || 'application/octet-stream';
-      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Type', contentTypeOf(path.extname(publicPath)));
       return fs.createReadStream(publicPath).pipe(res);
     }
   }
 
-  // API接口：获取全局配置
+  // API接口：获取全局配置（附带运行时信息，配置页用来显示当前实际生效状态）
   if (req.url === '/api/config' && req.method === 'GET') {
     const config = loadConfig();
-    res.setHeader('Content-Type', 'application/json');
-    return res.end(JSON.stringify({ code: 0, data: config }));
+    return sendJson(res, {
+      code: 0,
+      data: config,
+      runtime: {
+        activePort,
+        packaged: !!process.pkg,
+        platform: process.platform,
+        autoStartEnabled: isAutoStartEnabled(),
+        dataDir: DATA_DIR,
+        configPath: CONFIG_PATH,
+        mode: process.pkg ? 'exe' : 'dev'
+      }
+    });
   }
 
   // API接口：保存全局配置
@@ -416,19 +597,67 @@ const server = http.createServer((req, res) => {
       if (body.length > 1024 * 100) req.destroy();
     });
     req.on('end', () => {
+      let newConfig;
       try {
-        const newConfig = JSON.parse(body);
-        const oldConfig = loadConfig();
-        // 合并新旧配置，只更新传入的字段
-        const finalConfig = { ...oldConfig, ...newConfig };
-        saveConfig(finalConfig);
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ code: 0, data: finalConfig }));
+        newConfig = JSON.parse(body);
+        if (!newConfig || typeof newConfig !== 'object' || Array.isArray(newConfig)) {
+          throw new Error('配置必须是 JSON 对象');
+        }
       } catch (e) {
-        console.error('保存配置失败:', e);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ code: -1, msg: '保存配置失败' }));
+        console.error('保存配置失败:', e.message);
+        return sendJson(res, { code: -1, msg: '配置格式不正确' }, 500);
       }
+
+      const oldConfig = loadConfig();
+      // 先归一化再落盘，避免脏值写进配置文件
+      const finalConfig = normalizeConfig(newConfig, oldConfig);
+      saveConfig(finalConfig);
+
+      // 开机自启：开关变化时立刻写/删注册表
+      let autoStartResult = { ok: true, changed: false };
+      if (finalConfig.autoStart !== oldConfig.autoStart) {
+        autoStartResult = applyAutoStart(finalConfig.autoStart);
+        autoStartResult.changed = true;
+        if (!autoStartResult.ok) {
+          // 写注册表失败就回滚配置，保证配置与真实状态一致
+          finalConfig.autoStart = oldConfig.autoStart;
+          saveConfig(finalConfig);
+        }
+      }
+
+      // 端口：立即切到新端口监听，失败则回滚
+      if (finalConfig.webPort === activePort) {
+        return sendJson(res, {
+          code: 0,
+          data: finalConfig,
+          applied: { port: { ok: true, port: activePort, changed: false }, autoStart: autoStartResult }
+        });
+      }
+
+      switchPort(finalConfig.webPort).then(result => {
+        if (!result.ok) {
+          finalConfig.webPort = oldConfig.webPort;
+          saveConfig(finalConfig);
+        }
+        sendJson(res, {
+          code: 0,
+          data: finalConfig,
+          applied: {
+            port: {
+              ok: result.ok,
+              port: result.port,
+              changed: result.ok,
+              reason: result.reason
+            },
+            autoStart: autoStartResult
+          }
+        });
+      }).catch(e => {
+        console.warn('切换端口异常:', e.message);
+        finalConfig.webPort = oldConfig.webPort;
+        saveConfig(finalConfig);
+        sendJson(res, { code: 0, data: finalConfig, applied: { port: { ok: false, port: activePort, reason: e.message } } });
+      });
     });
     return;
   }
@@ -436,8 +665,7 @@ const server = http.createServer((req, res) => {
   // API接口：获取所有提醒
   if (req.url === '/api/reminders' && req.method === 'GET') {
     const list = JSON.parse(fs.readFileSync(DATA_PATH, 'utf-8')).map(migrateReminderFields);
-    res.setHeader('Content-Type', 'application/json');
-    return res.end(JSON.stringify(list));
+    return sendJson(res, list);
   }
 
   // API接口：新增/编辑提醒
@@ -474,12 +702,10 @@ const server = http.createServer((req, res) => {
         if (newReminder.enabled) startTask(newReminder);
         else stopTask(newReminder.id);
 
-        res.setHeader('Content-Type', 'application/json');
-        res.end(JSON.stringify({ code: 0, data: newReminder }));
+        sendJson(res, { code: 0, data: newReminder });
       } catch (e) {
         console.error('保存提醒失败:', e);
-        res.statusCode = 500;
-        res.end(JSON.stringify({ code: -1, msg: '保存失败' }));
+        sendJson(res, { code: -1, msg: '保存失败' }, 500);
       }
     });
     return;
@@ -497,11 +723,75 @@ const server = http.createServer((req, res) => {
 
   res.statusCode = 404;
   res.end('Not Found');
-});
+}
+
+// 在指定端口起一个监听实例（失败不影响当前实例）
+function listenOn(port) {
+  return new Promise((resolve, reject) => {
+    const s = http.createServer(handleRequest);
+    s.once('error', reject);
+    s.listen(port, () => {
+      s.removeListener('error', reject);
+      resolve(s);
+    });
+  });
+}
+
+// 端口热切换：先在新端口起监听，成功后再关掉旧监听
+async function switchPort(newPort) {
+  if (newPort === activePort) return { ok: true, port: activePort };
+  let next;
+  try {
+    next = await listenOn(newPort);
+  } catch (e) {
+    console.warn(`端口 ${newPort} 监听失败:`, e.message);
+    return { ok: false, port: activePort, reason: `端口 ${newPort} 不可用: ${e.message}` };
+  }
+  const old = server;
+  server = next;
+  const prevPort = activePort;
+  activePort = newPort;
+  if (old) old.close();
+  console.log(`服务端口已切换: ${prevPort} -> ${newPort}`);
+  return { ok: true, port: newPort, previous: prevPort };
+}
 
 // 启动流程
-initDataStore();
-loadAllTasks();
-server.listen(PORT, () => {
-  console.log(`提醒服务已启动，配置页面访问地址: http://localhost:${PORT}`);
+async function main() {
+  initDataStore();
+  const config = loadConfig();
+
+  // 开机自启配置在启动时同步一次，避免注册表与配置不一致
+  const autoStartResult = applyAutoStart(config.autoStart);
+  if (autoStartResult.ok && !autoStartResult.skipped) {
+    console.log(`开机自启: ${config.autoStart ? '已启用' : '已关闭'}`);
+  }
+
+  loadAllTasks();
+
+  // 端口来源：测试用环境变量 > 配置文件 > 默认端口
+  const startPort = clampNumber(
+    process.env.REMINDER_PORT || config.webPort,
+    CONFIG_LIMITS.webPort,
+    DEFAULT_PORT
+  );
+  try {
+    server = await listenOn(startPort);
+    activePort = startPort;
+  } catch (e) {
+    if (startPort !== DEFAULT_PORT) {
+      console.warn(`端口 ${startPort} 被占用，回退到默认端口 ${DEFAULT_PORT}`);
+      server = await listenOn(DEFAULT_PORT);
+      activePort = DEFAULT_PORT;
+    } else {
+      throw e;
+    }
+  }
+  console.log(`提醒服务已启动，提醒配置页: http://localhost:${activePort}`);
+  console.log(`全局设置页: http://localhost:${activePort}/config`);
+}
+
+main().catch(e => {
+  console.error('服务启动失败:', e.message);
+  process.exit(1);
 });

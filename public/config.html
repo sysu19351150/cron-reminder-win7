@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>全局设置 - 定时提醒</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 28px 16px 56px;
+      font-family: "微软雅黑", "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #333;
+      background: #f0f2f5;
+    }
+
+    .wrap { max-width: 860px; margin: 0 auto; }
+
+    /* ---------- 页头 ---------- */
+    .page-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+
+    .page-title {
+      margin: 0;
+      padding-left: 12px;
+      font-size: 22px;
+      font-weight: 600;
+      line-height: 1.3;
+      color: #1f2d3d;
+      border-left: 4px solid #2d8cf0;
+    }
+
+    .page-desc {
+      margin: 6px 0 0 16px;
+      font-size: 13px;
+      color: #8a94a6;
+    }
+
+    .head-link {
+      flex: none;
+      margin-top: 4px;
+      padding: 5px 14px;
+      font-size: 13px;
+      color: #2d8cf0;
+      text-decoration: none;
+      background: #fff;
+      border: 1px solid #bfdcfb;
+      border-radius: 4px;
+      transition: background-color .15s, border-color .15s;
+    }
+
+    .head-link:hover { background: #eaf4fe; border-color: #2d8cf0; }
+
+    /* ---------- 卡片 ---------- */
+    .card {
+      padding: 20px 24px;
+      margin-bottom: 20px;
+      background: #fff;
+      border: 1px solid #e3e8ee;
+      border-radius: 6px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .06);
+    }
+
+    .card-title {
+      margin: 0 0 6px;
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2d3d;
+    }
+
+    .card-sub {
+      margin: 0 0 16px;
+      font-size: 12px;
+      color: #97a3b4;
+    }
+
+    /* ---------- 表单行 ---------- */
+    .form-group {
+      display: flex;
+      align-items: flex-start;
+      padding: 12px 0;
+      border-bottom: 1px dashed #eef1f5;
+    }
+
+    .form-group:last-of-type { border-bottom: none; }
+
+    .form-group > label {
+      flex: 0 0 112px;
+      padding-top: 7px;
+      padding-right: 12px;
+      text-align: right;
+      color: #48576a;
+    }
+
+    .form-group .field { flex: 1; min-width: 0; }
+
+    input[type="number"],
+    input[type="text"] {
+      width: 140px;
+      padding: 7px 10px;
+      font-family: inherit;
+      font-size: 14px;
+      color: #333;
+      background: #fff;
+      border: 1px solid #d6dce4;
+      border-radius: 4px;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+
+    input[type="number"]:focus,
+    input[type="text"]:focus {
+      border-color: #2d8cf0;
+      box-shadow: 0 0 0 2px rgba(45, 140, 240, .15);
+    }
+
+    input[type="number"]:disabled { color: #97a3b4; background: #f7f8fa; }
+
+    .unit {
+      margin-left: 6px;
+      font-size: 13px;
+      color: #97a3b4;
+    }
+
+    .switch-line {
+      display: flex;
+      align-items: center;
+      padding-top: 6px;
+    }
+
+    .switch-line input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0 8px 0 0;
+      cursor: pointer;
+    }
+
+    .switch-line label { color: #48576a; cursor: pointer; }
+
+    .field-hint {
+      margin-top: 5px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #97a3b4;
+    }
+
+    .field-hint.warn { color: #ff9900; }
+
+    .mono { font-family: Consolas, "Courier New", monospace; }
+
+    /* ---------- 生效范围标签 ---------- */
+    .scope {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 0 7px;
+      font-size: 12px;
+      line-height: 18px;
+      border-radius: 10px;
+      vertical-align: middle;
+    }
+    .scope-now { color: #19be6b; background: #e8faf0; border: 1px solid #b7f0cd; }
+    .scope-next { color: #ff9900; background: #fff8e6; border: 1px solid #ffe0a3; }
+
+    /* ---------- 运行状态 ---------- */
+    .stat-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 32px;
+      font-size: 13px;
+      color: #5c6b7f;
+    }
+
+    .stat-grid > div { min-width: 150px; }
+
+    .stat-grid .k {
+      display: inline-block;
+      min-width: 62px;
+      color: #97a3b4;
+    }
+
+    .stat-grid .mono { font-family: Consolas, "Courier New", monospace; }
+
+    /* ---------- 按钮 ---------- */
+    .btn {
+      display: inline-block;
+      padding: 7px 18px;
+      font-family: inherit;
+      font-size: 14px;
+      line-height: 1.4;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background-color .15s, border-color .15s, color .15s;
+    }
+
+    .btn-primary { color: #fff; background: #2d8cf0; border-color: #2d8cf0; }
+    .btn-primary:hover { background: #2b85e4; border-color: #2b85e4; }
+    .btn-primary:disabled { background: #a6c9f0; border-color: #a6c9f0; cursor: not-allowed; }
+
+    .btn-default { color: #48576a; background: #fff; border-color: #d6dce4; }
+    .btn-default:hover { color: #2d8cf0; border-color: #2d8cf0; }
+
+    .form-actions {
+      margin-top: 18px;
+      padding-top: 16px;
+      border-top: 1px dashed #e3e8ee;
+    }
+    .form-actions .btn { margin-right: 10px; }
+
+    /* ---------- 保存结果提示 ---------- */
+    .result {
+      display: none;
+      margin-top: 14px;
+      padding: 10px 14px;
+      font-size: 13px;
+      line-height: 1.5;
+      border-radius: 4px;
+      word-break: break-all;
+    }
+    .result.show { display: block; }
+    .result.ok { color: #0f8a4d; background: #e8faf0; border: 1px solid #b7f0cd; }
+    .result.err { color: #c9370b; background: #fff4f0; border: 1px solid #f5c6b8; }
+    .result a { color: #2d8cf0; }
+
+    @media (max-width: 640px) {
+      body { padding: 18px 12px 40px; }
+      .card { padding: 16px; }
+      .page-head { flex-direction: column; }
+      .form-group { display: block; }
+      .form-group > label {
+        display: block;
+        flex: none;
+        padding: 0 0 6px;
+        text-align: left;
+      }
+      input[type="number"] { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="page-head">
+      <div>
+        <h1 class="page-title">全局设置</h1>
+        <p class="page-desc">通知、补提醒、端口与开机自启；这里的配置对整个服务生效，与单条提醒无关</p>
+      </div>
+      <a class="head-link" href="/">← 提醒配置</a>
+    </div>
+
+    <!-- 运行状态 -->
+    <div class="card">
+      <h3 class="card-title">当前运行状态</h3>
+      <p class="card-sub">以下为进程内的真实状态，用来核对配置是否已经生效</p>
+      <div class="stat-grid">
+        <div><span class="k">监听端口</span><span class="mono" id="statPort">-</span></div>
+        <div><span class="k">运行模式</span><span id="statMode">-</span></div>
+        <div><span class="k">自启注册项</span><span id="statAutoStart">-</span></div>
+        <div><span class="k">配置文件</span><span class="mono" id="statPath">-</span></div>
+      </div>
+    </div>
+
+    <!-- 表单 -->
+    <div class="card">
+      <h3 class="card-title">服务配置</h3>
+      <p class="card-sub">保存后立即写入 <span class="mono">data/config.json</span>，并在下表注明各自生效时机</p>
+
+      <form id="configForm" onsubmit="return false;">
+
+        <div class="form-group">
+          <label>静音模式</label>
+          <div class="field">
+            <div class="switch-line">
+              <input id="muted" type="checkbox">
+              <label for="muted">开启后到点只写日志，不弹气泡</label>
+            </div>
+            <div class="field-hint">立即生效：下一次触发就会按新开关处理。<span class="scope scope-now">即时</span></div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="notificationDuration">气泡停留时长</label>
+          <div class="field">
+            <input id="notificationDuration" type="number" min="1" max="60" step="1">
+            <span class="unit">秒（1-60）</span>
+            <div class="field-hint">下一次弹通知时生效；Win7 气泡和打包 exe 的通知器按此计时。<span class="scope scope-now">即时</span></div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>关机补提醒</label>
+          <div class="field">
+            <div class="switch-line">
+              <input id="enableCatchupCheck" type="checkbox">
+              <label for="enableCatchupCheck">启动时补发错过的提醒</label>
+            </div>
+            <div class="field-hint">关闭后服务启动时不再回溯补提醒。<span class="scope scope-next">下次启动</span></div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="maxCatchupHours">最大回溯时长</label>
+          <div class="field">
+            <input id="maxCatchupHours" type="number" min="1" max="168" step="1">
+            <span class="unit">小时（1-168）</span>
+            <div class="field-hint">超过这个时长的旧提醒不会补发，只在启动时读取。<span class="scope scope-next">下次启动</span></div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="webPort">服务端口</label>
+          <div class="field">
+            <input id="webPort" type="number" min="1024" max="65535" step="1">
+            <div class="field-hint">改完立即在新端口重新监听，旧端口关闭；端口被占用时会自动回滚。<span class="scope scope-now">即时</span></div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>开机自启</label>
+          <div class="field">
+            <div class="switch-line">
+              <input id="autoStart" type="checkbox">
+              <label for="autoStart">随 Windows 启动自动运行</label>
+            </div>
+            <div class="field-hint" id="autoStartHint">立即写入 / 移除注册表 Run 项（当前账户，无需管理员权限）。<span class="scope scope-now">即时</span></div>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button class="btn btn-primary" id="saveBtn" onclick="saveConfig()">保存配置</button>
+          <button class="btn btn-default" onclick="loadConfig()">重新读取</button>
+          <button class="btn btn-default" onclick="resetDefault()">恢复默认</button>
+        </div>
+
+        <div class="result" id="result"></div>
+      </form>
+    </div>
+
+  </div>
+
+  <script>
+    /* 数值字段的取值范围，与后端 CONFIG_LIMITS 保持一致 */
+    var LIMITS = {
+      notificationDuration: { min: 1, max: 60, def: 5 },
+      maxCatchupHours: { min: 1, max: 168, def: 48 },
+      webPort: { min: 1024, max: 65535, def: 28765 }
+    };
+
+    var runtime = {};
+
+    function esc(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    function showResult(text, ok, html) {
+      var box = document.getElementById('result');
+      box.className = 'result show ' + (ok ? 'ok' : 'err');
+      box.innerHTML = html ? text : esc(text);
+    }
+
+    function clampField(id) {
+      var rule = LIMITS[id];
+      var el = document.getElementById(id);
+      var n = Number(el.value);
+      if (!isFinite(n) || el.value === '') { el.value = rule.def; return rule.def; }
+      n = Math.round(n);
+      if (n < rule.min) n = rule.min;
+      if (n > rule.max) n = rule.max;
+      el.value = n;
+      return n;
+    }
+
+    function renderRuntime(rt) {
+      runtime = rt || {};
+      document.getElementById('statPort').textContent = rt && rt.activePort ? rt.activePort : '-';
+      document.getElementById('statMode').textContent =
+        rt ? (rt.mode === 'exe' ? '打包 exe' : '源码 node 模式') : '-';
+      document.getElementById('statAutoStart').textContent =
+        rt ? (rt.autoStartEnabled ? '已写入' : '未写入') : '-';
+      document.getElementById('statPath').textContent = rt && rt.configPath ? rt.configPath : '-';
+      if (rt && rt.platform !== 'win32') {
+        document.getElementById('autoStartHint').innerHTML =
+          '当前系统非 Windows，开机自启不可用，保存该开关不会有实际效果。';
+      }
+    }
+
+    /* 读取配置并回填表单 */
+    async function loadConfig() {
+      try {
+        var res = await fetch('/api/config');
+        var payload = await res.json();
+        var cfg = payload.data || {};
+        document.getElementById('muted').checked = !!cfg.muted;
+        document.getElementById('enableCatchupCheck').checked = !!cfg.enableCatchupCheck;
+        document.getElementById('autoStart').checked = !!cfg.autoStart;
+        document.getElementById('notificationDuration').value = cfg.notificationDuration;
+        document.getElementById('maxCatchupHours').value = cfg.maxCatchupHours;
+        document.getElementById('webPort').value = cfg.webPort;
+        renderRuntime(payload.runtime);
+      } catch (e) {
+        showResult('配置读取失败，请确认服务是否还在运行。', false);
+      }
+    }
+
+    function resetDefault() {
+      if (!confirm('把表单恢复为默认值？需要点“保存配置”才会写入。')) return;
+      document.getElementById('muted').checked = false;
+      document.getElementById('enableCatchupCheck').checked = true;
+      document.getElementById('autoStart').checked = false;
+      document.getElementById('notificationDuration').value = LIMITS.notificationDuration.def;
+      document.getElementById('maxCatchupHours').value = LIMITS.maxCatchupHours.def;
+      document.getElementById('webPort').value = LIMITS.webPort.def;
+      showResult('已恢复默认值，点“保存配置”后生效。', true);
+    }
+
+    async function saveConfig() {
+      var btn = document.getElementById('saveBtn');
+      btn.disabled = true;
+
+      var payload = {
+        muted: document.getElementById('muted').checked,
+        enableCatchupCheck: document.getElementById('enableCatchupCheck').checked,
+        autoStart: document.getElementById('autoStart').checked,
+        notificationDuration: clampField('notificationDuration'),
+        maxCatchupHours: clampField('maxCatchupHours'),
+        webPort: clampField('webPort')
+      };
+
+      try {
+        var res = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        var data = await res.json();
+        if (data.code !== 0) {
+          showResult(data.msg || '保存失败', false);
+          btn.disabled = false;
+          return;
+        }
+
+        var lines = [];
+        var applied = data.applied || {};
+        var okAll = true;
+
+        if (applied.port && applied.port.ok === false) {
+          okAll = false;
+          lines.push('端口未切换：' + esc(applied.port.reason || '未知原因') + '（已回滚为 ' + esc(applied.port.port) + '）');
+        } else if (applied.port && applied.port.changed) {
+          var newPort = applied.port.port;
+          lines.push('端口已切换到 <b>' + esc(newPort) + '</b>，请把浏览器地址改为 ' +
+            '<a href="http://localhost:' + esc(newPort) + '/config">http://localhost:' +
+            esc(newPort) + '/config</a> 继续操作');
+        } else if (applied.port && typeof applied.port.port === 'number') {
+          lines.push('端口未变化，仍为 ' + esc(applied.port.port));
+        }
+
+        if (applied.autoStart && applied.autoStart.changed) {
+          if (!applied.autoStart.ok) {
+            okAll = false;
+            lines.push('开机自启设置失败：' + esc(applied.autoStart.reason || '未知原因') + '（已回滚）');
+          } else {
+            lines.push('开机自启已' + (payload.autoStart ? '写入注册表' : '移除注册表项'));
+          }
+        }
+
+        lines.push('其余配置已写入 data/config.json：静音与气泡时长即时生效，补提醒相关设置下次启动生效。');
+        showResult(lines.join('<br>'), okAll, true);
+
+        var cfg = data.data || payload;
+        document.getElementById('muted').checked = !!cfg.muted;
+        document.getElementById('enableCatchupCheck').checked = !!cfg.enableCatchupCheck;
+        document.getElementById('autoStart').checked = !!cfg.autoStart;
+        document.getElementById('notificationDuration').value = cfg.notificationDuration;
+        document.getElementById('maxCatchupHours').value = cfg.maxCatchupHours;
+        document.getElementById('webPort').value = cfg.webPort;
+      } catch (e) {
+        showResult('保存失败：' + (e && e.message ? e.message : '网络异常'), false);
+      }
+      btn.disabled = false;
+    }
+
+    // 数字框失焦时即时收敛
+    ['notificationDuration', 'maxCatchupHours', 'webPort'].forEach(function (id) {
+      document.getElementById(id).addEventListener('blur', function () { clampField(id); });
+    });
+
+    loadConfig();
+  </script>
+</body>
+</html>

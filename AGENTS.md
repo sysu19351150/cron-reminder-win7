@@ -19,7 +19,8 @@ npm run build      # pkg 打包为单文件 dist/reminder-server.exe（node16-wi
 | 文件 | 职责 | 改动注意 |
 |------|------|----------|
 | `server.js` | 后端：HTTP 服务 + node-cron 调度 + node-notifier 通知 + 本地 JSON 持久化 | 只认知 `cronExpr` 字符串并调度；数据/API 契约见下 |
-| `public/index.html` | 前端全部（原生 HTML/CSS/JS，单文件） | **必须保持单文件**，见「核心约定」 |
+| `public/index.html` | 提醒配置主页面（原生 HTML/CSS/JS，单文件） | **必须保持单文件**，见「核心约定」 |
+| `public/config.html` | 全局设置页（静音/时长/补提醒/端口/自启），与主页面在当前标签页内互跳 | 同样是单文件前端，路由见 `server.js` |
 | `产品设计原型文档.md` | 完整产品设计 + 分优先级路线图（P0~P3） | 权威规格来源 |
 | `package.json` | 依赖、scripts、pkg 打包配置（assets 含 public 与 notifu.exe） | Win7 打包用 node16 目标 |
 | `test-init.js` | 一次性写入 3 条测试提醒 | 会覆盖 `data/reminders.json` |
@@ -28,9 +29,9 @@ npm run build      # pkg 打包为单文件 dist/reminder-server.exe（node16-wi
 ## 核心约定（改动前必读）
 
 ### 1. 前端必须是单文件 `public/index.html`
-`server.js` **只**服务 `GET /`、`GET /index.html` 和 API 路由，不服务任何额外静态资源（如 `/xxx.js`、`/xxx.css` 都会 404）。
-- 新增前端逻辑一律内联到 `index.html`，**不要**新建独立 .js/.css。
-- 如需拆分静态资源，必须同步改动 `server.js` 的静态文件路由，否则会 404。
+`server.js` 显式服务 `GET /`、`GET /index.html`（主页面）和 `GET /config`、`GET /config.html`（全局设置页），并兜底服务 `public/` 下已存在的静态文件与 `node_modules/` 资源。
+- 新增前端逻辑仍内联到对应页面，**不要**新建独立 .js/.css（`cron-editor.js/.css` 为历史例外）。
+- 新增页面必须同步在 `server.js` 加路由（如 `/config`），否则访问会 404。
 
 ### 2. cron 表达式格式（6 段、含秒）
 node-cron 使用 6 段：`秒 分 时 日 月 周`（周：0 或 7 = 周日，1=周一 … 6=周六）。
@@ -53,6 +54,8 @@ node-cron 使用 6 段：`秒 分 时 日 月 周`（周：0 或 7 = 周日，1=
 路线图规划新增字段（未实现）：`lastFiredTimestamp`、`lastCatchupTimestamp`（关机补提醒用）。
 
 ### 4. API 契约
+- `GET  /api/config` → 返回全局配置 + `runtime`（实际监听端口、是否打包 exe、注册表自启状态）
+- `POST /api/config` → 合并写入并归一化（数值夹范围、字符串转布尔）；端口热切换、自启即时写注册表，失败自动回滚
 - `GET  /api/reminders` → 返回提醒数组
 - `POST /api/reminders` → 有 `id` 时编辑、无 `id` 时新增；含 `enabled` 时按需 start/stop 调度
 - `DELETE /api/reminders/:id` → 删除并停止调度
@@ -75,4 +78,5 @@ node-cron 使用 6 段：`秒 分 时 日 月 周`（周：0 或 7 = 周日，1=
 ## 当前实现状态（对照路线图）
 - ✅ P0 核心：服务常驻、秒级调度、原生通知、JSON 持久化、增删改查、pkg 打包。
 - ✅ v2.0 图形化定时配置（本次已完成）：6 维度下拉、日期/星期互斥、5 模板、最近 5 次触发预览。
-- ⏳ 待办（详见 `产品设计原型文档.md` 第六~十节）：系统托盘驻留、开机自启动、关机补提醒、历史记录、提示音、「稍后提醒」、全局设置（静音/端口/回溯时长）。
+- ✅ v3.0 全局设置页：静音、气泡时长、补提醒开关与回溯时长、端口热切换、开机自启，全部字段后端真实读取并生效（`test-config.js` / `npm run test:config` 覆盖 42 项断言）。
+- ⏳ 待办（详见 `产品设计原型文档.md` 第六~十节）：系统托盘驻留、历史记录、提示音、「稍后提醒」。
