@@ -24,6 +24,7 @@
   "pkg": {
     "assets": [
       "public/**/*",
+      "assets/**/*",
       "node_modules/node-notifier/vendor/notifu/**/*"
     ],
     "scripts": [

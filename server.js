@@ -1,7 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { exec, execSync } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 const _ = require('lodash');
 const cron = require('node-cron');
 const notifierLib = require('node-notifier');
@@ -25,7 +25,9 @@ const DEFAULT_CONFIG = {
   maxCatchupHours: 48,
   webPort: DEFAULT_PORT,
   autoStart: false,
-  enableCatchupCheck: true
+  enableCatchupCheck: true,
+  // 启动后最小化到系统托盘（打包 exe 时隐藏控制台窗口，只在通知区保留图标）
+  startMinimizedToTray: true
 };
 
 // 数值型配置的取值范围，前端配置页与后端校验共用同一套口径
@@ -267,6 +269,7 @@ function normalizeConfig(input, base) {
   if ('muted' in src) merged.muted = toBool(src.muted);
   if ('enableCatchupCheck' in src) merged.enableCatchupCheck = toBool(src.enableCatchupCheck);
   if ('autoStart' in src) merged.autoStart = toBool(src.autoStart);
+  if ('startMinimizedToTray' in src) merged.startMinimizedToTray = toBool(src.startMinimizedToTray);
   if ('notificationDuration' in src) {
     merged.notificationDuration = clampNumber(src.notificationDuration, CONFIG_LIMITS.notificationDuration, DEFAULT_CONFIG.notificationDuration);
   }
@@ -383,6 +386,152 @@ function applyAutoStart(enabled) {
     return { ok: false, reason: e.message };
   }
 }
+
+/* ---------------- 系统托盘（启动时最小化到通知区） ---------------- */
+
+// 托盘助手是一个独立的 PowerShell 进程：Win7 自带 PowerShell 2.0 和 .NET 3.5，
+// 用 System.Windows.Forms.NotifyIcon 就能做出原生托盘图标，不需要引入原生模块。
+// pkg 快照里的脚本不能直接执行，启动前释放到临时目录；脚本里的中文依赖 UTF-8 BOM，
+// 否则 PowerShell 2.0 会按 ANSI 解析而报错。
+const TRAY_TEMP_DIR = path.join(os.tmpdir(), 'win7-tiny-reminder-tray');
+const TRAY_SCRIPT_SRC = path.join(__dirname, 'assets', 'tray.ps1');
+const TRAY_SCRIPT_PATH = path.join(TRAY_TEMP_DIR, 'tray.ps1');
+
+let trayProcess = null; // 当前托盘助手子进程
+let trayPort = 0; // 托盘菜单当前指向的端口
+let trayStopFile = ''; // 每个助手独享的停止标记，避免重启时新旧助手互相干扰
+let lastTrayError = '';
+
+function isTraySupported() {
+  return process.platform === 'win32';
+}
+
+function isTrayActive() {
+  return !!(trayProcess && trayProcess.pid);
+}
+
+// 释放托盘脚本到临时目录；内容没变就复用，避免每次启动都写盘
+function prepareTrayScript() {
+  if (!fs.existsSync(TRAY_TEMP_DIR)) fs.mkdirSync(TRAY_TEMP_DIR, { recursive: true });
+  let content = fs.readFileSync(TRAY_SCRIPT_SRC);
+  if (!(content.length >= 3 && content[0] === 0xEF && content[1] === 0xBB && content[2] === 0xBF)) {
+    content = Buffer.concat([Buffer.from([0xEF, 0xBB, 0xBF]), content]);
+  }
+  let needWrite = true;
+  try {
+    needWrite = !fs.readFileSync(TRAY_SCRIPT_PATH).equals(content);
+  } catch (e) {
+    needWrite = true;
+  }
+  if (needWrite) fs.writeFileSync(TRAY_SCRIPT_PATH, content);
+  return TRAY_SCRIPT_PATH;
+}
+
+// 拉起托盘助手；返回 {ok, active, pid?, reason?}
+function startTray(port) {
+  if (!isTraySupported()) {
+    return { ok: false, active: false, reason: '当前系统不支持系统托盘' };
+  }
+  if (process.env.REMINDER_TRAY_DISABLE === '1') {
+    return { ok: true, active: false, skipped: true, reason: '当前进程已通过环境变量禁用托盘' };
+  }
+  if (isTrayActive()) {
+    if (trayPort === port) return { ok: true, active: true, pid: trayProcess.pid, reused: true };
+    stopTray();
+  }
+  try {
+    const scriptPath = prepareTrayScript();
+    // 停止标记按「服务进程 + 启动时刻」命名，重启助手时旧标记不会误伤新助手
+    const stopFile = path.join(TRAY_TEMP_DIR, 'tray-' + process.pid + '-' + Date.now() + '.stop');
+    try {
+      if (fs.existsSync(stopFile)) fs.unlinkSync(stopFile); // 仅清理本程序自己的临时标记
+    } catch (e) {
+      // 忽略：标记文件不存在即可
+    }
+    // 只有打包 exe 才隐藏控制台；源码模式保留控制台方便看日志
+    const hideConsole = process.pkg ? 1 : 0;
+    // 注意：这里不能加 -WindowStyle Hidden，也不能用 detached:true。
+    // Node 在 Windows 上用 DETACHED_PROCESS 启动时，PowerShell 会直接退出而不执行脚本；
+    // 用 -WindowStyle Hidden 则会连同源码模式下的控制台一起藏掉，不利于看日志。
+    const args = [
+      '-NoProfile',
+      '-ExecutionPolicy', 'Bypass',
+      '-File', scriptPath,
+      '-ServerPid', String(process.pid),
+      '-Port', String(port),
+      '-ExePath', process.execPath,
+      '-StopFile', stopFile,
+      '-HideConsole', String(hideConsole)
+    ];
+    const child = spawn('powershell.exe', args, {
+      windowsHide: true,
+      stdio: 'ignore'
+    });
+    trayProcess = child;
+    trayPort = port;
+    trayStopFile = stopFile;
+    lastTrayError = '';
+
+    child.on('error', err => {
+      lastTrayError = err.message;
+      if (trayProcess === child) {
+        trayProcess = null;
+        trayPort = 0;
+      }
+      console.warn('托盘助手启动失败:', err.message);
+    });
+    child.on('exit', code => {
+      if (trayProcess === child) {
+        trayProcess = null;
+        trayPort = 0;
+      }
+      if (code && code !== 0) console.warn('托盘助手已退出, code=' + code);
+    });
+    child.unref();
+
+    console.log(`托盘图标已启动, pid=${child.pid}, 端口=${port}${hideConsole ? ', 将隐藏控制台' : ''}`);
+    return { ok: true, active: true, pid: child.pid, hiddenConsole: !!hideConsole };
+  } catch (e) {
+    lastTrayError = e.message;
+    trayProcess = null;
+    trayPort = 0;
+    trayStopFile = '';
+    console.warn('托盘启动失败:', e.message);
+    return { ok: false, active: false, reason: e.message };
+  }
+}
+
+// 让托盘助手自己退出（写停止标记），避免直接杀进程留下幽灵图标；
+// 8 秒内没退出再强制结束（给“恢复控制台”留足编译/显示时间）。
+// showConsole=true 时顺带把隐藏的控制台重新显示出来
+// （用户在设置页关掉托盘时用），避免控制台一直藏着、看起来像没有界面。
+function stopTray(options) {
+  const showConsole = !!(options && options.showConsole);
+  const child = trayProcess;
+  const stopFile = trayStopFile;
+  trayProcess = null;
+  trayPort = 0;
+  trayStopFile = '';
+  if (!child) return { ok: true, active: false };
+
+  try {
+    if (stopFile) fs.writeFileSync(stopFile, showConsole ? 'show' : 'stop');
+  } catch (e) {
+    // 忽略：退而求其次，靠下面的强制结束兜底
+  }
+  const forceTimer = setTimeout(() => {
+    try { child.kill(); } catch (e) { /* 已自行退出 */ }
+  }, 8000);
+  if (forceTimer.unref) forceTimer.unref();
+  return { ok: true, active: false };
+}
+
+// 进程退出时通知助手收掉图标（正常退出场景；被强杀时由助手自己检测主进程消失）
+process.on('exit', () => {
+  if (trayStopFile) {
+    try { fs.writeFileSync(trayStopFile, 'stop'); } catch (e) { /* 忽略 */ }
+  }
+});
 
 // 数据兼容：给旧数据补全缺失的lastFiredTimestamp、lastCatchupTimestamp和jumpUrl字段
 function migrateReminderFields(reminder) {
@@ -582,6 +731,10 @@ function handleRequest(req, res) {
         packaged: !!process.pkg,
         platform: process.platform,
         autoStartEnabled: isAutoStartEnabled(),
+        traySupported: isTraySupported(),
+        trayActive: isTrayActive(),
+        trayPid: trayProcess ? trayProcess.pid : 0,
+        trayError: lastTrayError,
         dataDir: DATA_DIR,
         configPath: CONFIG_PATH,
         mode: process.pkg ? 'exe' : 'dev'
@@ -625,13 +778,39 @@ function handleRequest(req, res) {
         }
       }
 
-      // 端口：立即切到新端口监听，失败则回滚
-      if (finalConfig.webPort === activePort) {
-        return sendJson(res, {
+      // 托盘开关：与端口可能同时变化，等端口确定后再统一应用，
+      // 保证托盘菜单里的链接指向真正在监听的端口
+      const trayChanged = finalConfig.startMinimizedToTray !== oldConfig.startMinimizedToTray;
+
+      const finish = (portApplied) => {
+        let trayApplied = { ok: true, changed: false, active: isTrayActive() };
+        if (trayChanged) {
+          if (finalConfig.startMinimizedToTray) {
+            trayApplied = Object.assign({ changed: true }, startTray(activePort));
+          } else {
+            stopTray({ showConsole: true });
+            trayApplied = { ok: true, changed: true, active: false };
+          }
+        } else if (finalConfig.startMinimizedToTray && isTrayActive() && trayPort !== activePort) {
+          // 端口热切换后，托盘菜单里的链接也要跟着换
+          stopTray();
+          trayApplied = Object.assign({ changed: false, restarted: true }, startTray(activePort));
+        }
+
+        sendJson(res, {
           code: 0,
           data: finalConfig,
-          applied: { port: { ok: true, port: activePort, changed: false }, autoStart: autoStartResult }
+          applied: {
+            port: portApplied,
+            autoStart: autoStartResult,
+            tray: trayApplied
+          }
         });
+      };
+
+      // 端口：立即切到新端口监听，失败则回滚
+      if (finalConfig.webPort === activePort) {
+        return finish({ ok: true, port: activePort, changed: false });
       }
 
       switchPort(finalConfig.webPort).then(result => {
@@ -639,24 +818,17 @@ function handleRequest(req, res) {
           finalConfig.webPort = oldConfig.webPort;
           saveConfig(finalConfig);
         }
-        sendJson(res, {
-          code: 0,
-          data: finalConfig,
-          applied: {
-            port: {
-              ok: result.ok,
-              port: result.port,
-              changed: result.ok,
-              reason: result.reason
-            },
-            autoStart: autoStartResult
-          }
+        finish({
+          ok: result.ok,
+          port: result.ok ? result.port : activePort,
+          changed: result.ok,
+          reason: result.reason
         });
       }).catch(e => {
         console.warn('切换端口异常:', e.message);
         finalConfig.webPort = oldConfig.webPort;
         saveConfig(finalConfig);
-        sendJson(res, { code: 0, data: finalConfig, applied: { port: { ok: false, port: activePort, reason: e.message } } });
+        finish({ ok: false, port: activePort, changed: false, reason: e.message });
       });
     });
     return;
@@ -789,6 +961,14 @@ async function main() {
   }
   console.log(`提醒服务已启动，提醒配置页: http://localhost:${activePort}`);
   console.log(`全局设置页: http://localhost:${activePort}/config`);
+
+  // 按配置驻留托盘：打包 exe 时助手会隐藏控制台窗口，双击图标可回到配置页
+  if (config.startMinimizedToTray) {
+    const trayResult = startTray(activePort);
+    if (!trayResult.ok) {
+      console.warn('最小化到托盘失败:', trayResult.reason);
+    }
+  }
 }
 
 main().catch(e => {

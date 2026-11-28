@@ -12,17 +12,20 @@
 npm install        # 依赖：lodash、node-cron、node-notifier（devDependencies: pkg）
 npm start          # 启动服务，配置页 http://localhost:28765
 node test-init.js  # 可选：生成 3 条测试提醒数据
+npm run test:config        # 源码模式跑全局配置/托盘生效性检查
+npm run test:config:exe    # 同一套检查跑打包后的 exe
 npm run build      # pkg 打包为单文件 dist/reminder-server.exe（node16-win-x64）
 ```
 
 ## 架构与关键文件
 | 文件 | 职责 | 改动注意 |
 |------|------|----------|
-| `server.js` | 后端：HTTP 服务 + node-cron 调度 + node-notifier 通知 + 本地 JSON 持久化 | 只认知 `cronExpr` 字符串并调度；数据/API 契约见下 |
+| `server.js` | 后端：HTTP 服务 + node-cron 调度 + node-notifier 通知 + 本地 JSON 持久化 + 托盘助手管理 | 只认知 `cronExpr` 字符串并调度；数据/API 契约见下 |
 | `public/index.html` | 提醒配置主页面（原生 HTML/CSS/JS，单文件） | **必须保持单文件**，见「核心约定」 |
-| `public/config.html` | 全局设置页（静音/时长/补提醒/端口/自启），与主页面在当前标签页内互跳 | 同样是单文件前端，路由见 `server.js` |
+| `public/config.html` | 全局设置页（静音/时长/补提醒/端口/自启/托盘），与主页面在当前标签页内互跳 | 同样是单文件前端，路由见 `server.js` |
+| `assets/tray.ps1` | 托盘助手：PowerShell 2.0 + WinForms NotifyIcon，负责隐藏控制台、托盘菜单、退出 | 必须保持 PS2 兼容；经 pkg assets 打进 exe，运行时释放到临时目录 |
 | `产品设计原型文档.md` | 完整产品设计 + 分优先级路线图（P0~P3） | 权威规格来源 |
-| `package.json` | 依赖、scripts、pkg 打包配置（assets 含 public 与 notifu.exe） | Win7 打包用 node16 目标 |
+| `package.json` | 依赖、scripts、pkg 打包配置（assets 含 public、assets 与 notifu.exe） | Win7 打包用 node16 目标 |
 | `test-init.js` | 一次性写入 3 条测试提醒 | 会覆盖 `data/reminders.json` |
 | `data/*.json` | 运行时数据，已被 `.gitignore` 忽略 | 首次运行自动生成 |
 
@@ -51,11 +54,15 @@ node-cron 使用 6 段：`秒 分 时 日 月 周`（周：0 或 7 = 周日，1=
 ]
 ```
 说明：`id` 由后端 `_.uniqueId('rem_')` 生成；`enabled` 控制是否调度。
-路线图规划新增字段（未实现）：`lastFiredTimestamp`、`lastCatchupTimestamp`（关机补提醒用）。
+提醒还带 `lastFiredTimestamp`、`lastCatchupTimestamp`（关机补提醒基准，缺省/异常时由 `migrateReminderFields` 修复）与 `jumpUrl`（通知点击跳转地址）。
+
+### 3.1 全局配置字段（`data/config.json`）
+`muted`、`notificationDuration`（1-60 秒）、`maxCatchupHours`（1-168）、`webPort`（1024-65535）、`autoStart`、`enableCatchupCheck`、`startMinimizedToTray`（默认 `true`）。
+新增字段必须同步：`DEFAULT_CONFIG` → `normalizeConfig` → `config.html` 表单/`LIMITS` → `test-config.js` 断言。
 
 ### 4. API 契约
-- `GET  /api/config` → 返回全局配置 + `runtime`（实际监听端口、是否打包 exe、注册表自启状态）
-- `POST /api/config` → 合并写入并归一化（数值夹范围、字符串转布尔）；端口热切换、自启即时写注册表，失败自动回滚
+- `GET  /api/config` → 返回全局配置 + `runtime`（实际监听端口、是否打包 exe、注册表自启状态、`traySupported/trayActive/trayPid/trayError`）
+- `POST /api/config` → 合并写入并归一化（数值夹范围、字符串转布尔）；端口热切换、自启即时写注册表、托盘即时启停；端口切换失败自动回滚。响应里的 `applied` 含 `port / autoStart / tray` 三块，`applied.tray` 会带 `ok / changed / active / pid / restarted`
 - `GET  /api/reminders` → 返回提醒数组
 - `POST /api/reminders` → 有 `id` 时编辑、无 `id` 时新增；含 `enabled` 时按需 start/stop 调度
 - `DELETE /api/reminders/:id` → 删除并停止调度
@@ -75,8 +82,19 @@ node-cron 使用 6 段：`秒 分 时 日 月 周`（周：0 或 7 = 周日，1=
 - 不使用 Win8+ 专属 API；通知走 `node-notifier` 的 vendor notifu.exe。
 - 数据默认放程序同级目录，避免 UAC 虚拟重定向。
 
+### 8. 托盘驻留实现（`assets/tray.ps1`）
+- 托盘不是原生模块，而是 **PowerShell 2.0 + `System.Windows.Forms.NotifyIcon`** 助手进程（Win7 自带，零额外依赖）。
+- pkg 快照里的 ps1 不能直接执行：`server.js` 启动时把它释放到 `%TEMP%\win7-tiny-reminder-tray\tray.ps1`（补 UTF-8 BOM，否则 PS2 按 ANSI 解析中文会报错），再 `spawn('powershell.exe', ['-File', ...])`。
+- **禁止**给 spawn 加 `detached: true`，也不要用 `-WindowStyle Hidden`：实测 DETACHED_PROCESS 下 PowerShell 会直接退出而不执行脚本；`-WindowStyle Hidden` 会连源码模式的控制台一起藏掉。隐藏控制台由 ps1 内 `AttachConsole + ShowWindow(SW_HIDE)` 完成。
+- 隐藏控制台只在 `process.pkg`（打包 exe）且控制台里只有「服务进程 + 托盘助手」时执行；从 cmd/终端启动（共享控制台）会自动跳过，避免把用户终端藏掉。
+- 生命周期：配置开关即时启停；端口热切换会重启助手以更新菜单链接；助手每 1 秒检测主进程是否存活，主进程退出（含被强杀）后自行消失；正常停止通过独享的 `.stop` 标记文件，8 秒未退出才强杀（给恢复控制台留时间）。
+- 关闭托盘时 `.stop` 里写 `show`，助手退出前会把之前隐藏的控制台重新显示（否则设置页关掉托盘后控制台会一直藏着）；其他停止场景写 `stop`。
+- 托盘菜单：打开提醒配置（`/`）、全局设置（`/config`）、退出程序（结束服务进程）；双击图标打开提醒配置。
+- 测试隔离：`REMINDER_TRAY_DISABLE=1` 时 `startTray` 直接返回 skipped；`test-config.js` 默认给所有临时实例加这个变量，只有托盘用例显式传 `0`。
+
 ## 当前实现状态（对照路线图）
 - ✅ P0 核心：服务常驻、秒级调度、原生通知、JSON 持久化、增删改查、pkg 打包。
 - ✅ v2.0 图形化定时配置（本次已完成）：6 维度下拉、日期/星期互斥、5 模板、最近 5 次触发预览。
-- ✅ v3.0 全局设置页：静音、气泡时长、补提醒开关与回溯时长、端口热切换、开机自启，全部字段后端真实读取并生效（`test-config.js` / `npm run test:config` 覆盖 42 项断言）。
-- ⏳ 待办（详见 `产品设计原型文档.md` 第六~十节）：系统托盘驻留、历史记录、提示音、「稍后提醒」。
+- ✅ v3.0 全局设置页：静音、气泡时长、补提醒开关与回溯时长、端口热切换、开机自启，全部字段后端真实读取并生效。
+- ✅ v3.1 启动时最小化到系统托盘：`startMinimizedToTray` 默认开启；配置页即时启停，打包 exe 启动后隐藏控制台、双击/右键菜单可用，端口切换自动更新链接，主进程退出后助手自行清理。源码与 exe 各覆盖 72 项断言（`npm run test:config` / `npm run test:config:exe`）。
+- ⏳ 待办（详见 `产品设计原型文档.md` 第六~十节）：历史记录、提示音、「稍后提醒」、托盘图标随静音变灰（P2）等。

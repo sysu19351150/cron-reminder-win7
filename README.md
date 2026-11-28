@@ -10,7 +10,8 @@
 - **最近 5 次触发时间**实时预览
 - 日期 / 星期**智能互斥**，避免配置出语义冲突的规则
 - 原生系统右下角气泡通知
-- **独立全局设置页**（http://localhost:28765/config）：静音、气泡时长、补提醒开关与回溯时长、端口热切换、开机自启
+- **独立全局设置页**（http://localhost:28765/config）：静音、气泡时长、补提醒开关与回溯时长、端口热切换、开机自启、**启动时最小化到托盘**
+- **系统托盘驻留**：打包 exe 启动后隐藏控制台，只在通知区保留图标；双击打开提醒配置，右键可打开设置或退出（可在全局设置页关闭）
 - 数据全量本地 JSON 持久化（原子写入，断电不损坏）
 - 支持秒级精度 cron 调度
 
@@ -37,9 +38,9 @@ node test-init.js
 npm run test:config
 ```
 
-脚本会在临时目录起独立实例（随机端口、数据与正式环境隔离），逐项验证静音、气泡时长、补提醒开关、回溯时长、端口热切换、开机自启是否真实生效，结束后自动清理。
+脚本会在临时目录起独立实例（随机端口、数据与正式环境隔离），逐项验证静音、气泡时长、补提醒开关、回溯时长、端口热切换、开机自启、托盘助手启停与生命周期是否真实生效，结束后自动清理。
 
-只验证打包产物时改用 `npm run test:config:exe`，同一套 42 项检查直接跑在 `dist/reminder-server.exe` 上。
+只验证打包产物时改用 `npm run test:config:exe`，同一套 72 项检查直接跑在 `dist/reminder-server.exe` 上。
 
 ## 打包为单文件 exe
 
@@ -47,12 +48,13 @@ npm run test:config
 npm run build
 ```
 
-产物输出到 `dist/reminder-server.exe`（基于 Node 16、原生兼容 Windows 7）。
+产物输出到 `dist/reminder-server.exe`（基于 Node 16、原生兼容 Windows 7）。打包后的 exe 默认启动即最小化到系统托盘并隐藏控制台，可在全局设置页关闭该行为。
 
 ## 项目结构
 
 ```
-server.js            后端服务（调度 + 通知 + 持久化 + API）
+server.js            后端服务（调度 + 通知 + 持久化 + API + 托盘管理）
+assets/tray.ps1      托盘助手（Win7 自带 PowerShell 2.0 + NotifyIcon）
 public/index.html    提醒配置主页面（单文件前端）
 public/config.html   全局设置页（单文件前端）
 产品设计原型文档.md   完整产品设计与路线图

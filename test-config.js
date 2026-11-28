@@ -8,7 +8,7 @@
  * 做法：
  *  - 用 REMINDER_DATA_DIR 把数据隔离到临时目录、用随机空闲端口启动独立实例；
  *  - 逐项验证 config.json 里的每个字段是否真的在后端生效；
- *  - 覆盖通知静音、端口热切换与回滚、开机自启注册表、补提醒回溯开关/时长；
+ *  - 覆盖通知静音、端口热切换与回滚、开机自启注册表、补提醒回溯开关/时长、托盘助手启停与生命周期；
  *  - 结束时杀掉所有子进程并删除临时目录，开机自启项恢复为关闭。
  */
 
@@ -45,6 +45,27 @@ function check(cond, label, extra) {
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Windows 下用信号 0 探测进程是否存在（ESRCH 表示已退出）
+function isPidAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+// 轮询等待进程退出：PowerShell 冷启动可能比固定等待更慢，用截止时间更稳
+async function waitPidGone(pid, timeoutMs) {
+  const deadline = Date.now() + (timeoutMs || 10000);
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return true;
+    await sleep(200);
+  }
+  return !isPidAlive(pid);
+}
 
 const usedPorts = new Set();
 
@@ -124,7 +145,10 @@ class Server {
       cwd: EXE_PATH ? path.dirname(EXE_PATH) : ROOT,
       env: Object.assign({}, process.env, {
         REMINDER_DATA_DIR: dataDir,
-        REMINDER_PORT: String(port)
+        REMINDER_PORT: String(port),
+        // 默认禁用托盘，避免几十个临时实例各弹一个托盘图标；
+        // 托盘用例会显式传 REMINDER_TRAY_DISABLE: '0' 打开
+        REMINDER_TRAY_DISABLE: '1'
       }, extraEnv || {})
     });
     const collect = chunk => {
@@ -208,6 +232,7 @@ async function main() {
   const portB = await freePort();
   const portC = await freePort();
   const servers = [];
+  const trayPidsToClean = [];
 
   try {
     /* ============ 1. 主实例：页面路由 + 配置读写 + 各字段生效 ============ */
@@ -219,9 +244,12 @@ async function main() {
     const cfg0 = initial.data;
     check(cfg0.muted === false && cfg0.enableCatchupCheck === true && cfg0.autoStart === false,
       '默认布尔配置项正确', JSON.stringify(cfg0));
+    check(cfg0.startMinimizedToTray === true, 'startMinimizedToTray 默认开启', String(cfg0.startMinimizedToTray));
     check(cfg0.notificationDuration === 5 && cfg0.maxCatchupHours === 48 && cfg0.webPort === 28765,
       '默认数值配置项正确（webPort 默认 28765，测试用环境变量覆盖监听端口）', JSON.stringify(cfg0));
     check(initial.runtime && initial.runtime.activePort === portA, 'runtime.activePort 与实际监听端口一致', JSON.stringify(initial.runtime));
+    check(initial.runtime.traySupported === true && initial.runtime.trayActive === false,
+      'runtime 暴露托盘能力与状态（本实例按测试约定禁用托盘）', JSON.stringify(initial.runtime));
 
     // 默认 config.webPort(28765) 与测试监听端口不一致，先对齐，
     // 否则后面任何 POST /api/config 都会触发热切换到 28765
@@ -234,6 +262,8 @@ async function main() {
       '主页面可访问且带「全局设置」入口');
     const pageCfg = await request(portA, 'GET', '/config');
     check(pageCfg.status === 200 && pageCfg.text.indexOf('服务配置') !== -1, '/config 返回全局设置页');
+    check(pageCfg.text.indexOf('id="startMinimizedToTray"') !== -1 &&
+      pageCfg.text.indexOf('最小化到系统托盘') !== -1, '/config 提供「启动时最小化到托盘」开关');
     check(pageCfg.text.indexOf('href="/"') !== -1 && pageCfg.text.indexOf('target="_blank"') === -1, '设置页与主页面在当前标签页内互跳');
     const pageCfg2 = await request(portA, 'GET', '/config.html');
     check(pageCfg2.status === 200, '/config.html 兼容访问');
@@ -244,7 +274,8 @@ async function main() {
       maxCatchupHours: 0,
       muted: 'yes',
       autoStart: 'false',
-      enableCatchupCheck: 'no'
+      enableCatchupCheck: 'no',
+      startMinimizedToTray: 'off'
     });
     check(bad.json && bad.json.code === 0, '提交非法值仍返回 code=0');
     const bd = bad.json.data;
@@ -253,6 +284,7 @@ async function main() {
     check(bd.muted === true, '字符串 yes 解析为 true', String(bd.muted));
     check(bd.autoStart === false, '字符串 false 解析为 false（不误判为真）', String(bd.autoStart));
     check(bd.enableCatchupCheck === false, '字符串 no 解析为 false', String(bd.enableCatchupCheck));
+    check(bd.startMinimizedToTray === false, '字符串 off 解析为 false', String(bd.startMinimizedToTray));
 
     const persisted = readConfigFile(dirA);
     check(persisted.notificationDuration === 5 && persisted.maxCatchupHours === 1 && persisted.muted === true,
@@ -274,9 +306,11 @@ async function main() {
     check(s1.hasLog(/\[静音\] 已跳过通知: .*静音测试|\[静音\] 已跳过通知: 🕒 定时提醒 - 静音期间不应弹气泡/),
       'muted=true 时通知被拦截并留下日志', s1.logs.slice(-6).join(' | '));
 
-    const beforeUnmuted = s1.countLog(/\[静音\] 已跳过通知/);
+    // 先删掉秒级任务并等它彻底停下，再取基准值，
+    // 否则删除瞬间可能还有一次已排队的触发落进拦截日志，造成假失败
     await request(portA, 'DELETE', '/api/reminders/' + mutedId);
     await sleep(1500);
+    const beforeUnmuted = s1.countLog(/\[静音\] 已跳过通知/);
     await request(portA, 'POST', '/api/config', { muted: false });
     const rLoud = await request(portA, 'POST', '/api/reminders', {
       name: '对照测试', cronExpr: '*/2 * * * * *', content: '静音关闭后的对照通知', enabled: true
@@ -428,7 +462,6 @@ async function main() {
     /* ---- 4f. 时间戳缺失（老数据）时不做回溯 ---- */
     const dirF = makeDir('f');
     const port4f = await freePort();
-    const nowF = Date.now();
     seedDir(dirF, { muted: true, notificationDuration: 5, maxCatchupHours: 48, webPort: port4f, autoStart: false, enableCatchupCheck: true }, [{
       id: 'rem_zero', name: '缺时间戳', cronExpr: '0 * * * * *', content: '老数据',
       enabled: true, lastFiredTimestamp: 0, lastCatchupTimestamp: 0, jumpUrl: ''
@@ -439,8 +472,13 @@ async function main() {
     await sleep(1200);
     check(!sF.hasLog(/补提醒触发/), '时间戳缺失时不做回溯，避免一启动补一堆旧提醒');
     const fileF = readReminders(dirF)[0];
-    check(fileF.lastFiredTimestamp > nowF - 5000 && fileF.lastCatchupTimestamp > nowF - 5000,
-      '缺失的时间戳被初始化为当前时间', JSON.stringify([fileF.lastFiredTimestamp, fileF.lastCatchupTimestamp]));
+    const checkedAtF = Date.now();
+    // 用“读取时刻 ±2 分钟”判断，避免 exe 冷启动慢或系统校时造成脆性失败
+    check(fileF.lastFiredTimestamp > 0 &&
+      Math.abs(checkedAtF - fileF.lastFiredTimestamp) < 120000 &&
+      fileF.lastCatchupTimestamp === fileF.lastFiredTimestamp,
+      '缺失的时间戳被初始化为当前时间',
+      JSON.stringify([fileF.lastFiredTimestamp, fileF.lastCatchupTimestamp, checkedAtF]));
     await sF.stop();
 
     /* ---- 4g. 基准早于回溯窗口时，窗口内真正错过的点仍要补 ---- */
@@ -479,6 +517,67 @@ async function main() {
     const rt2 = await request(port5, 'GET', '/api/config');
     check(rt2.json.runtime.autoStartEnabled === false, '运行时状态显示自启已关闭');
     check(readConfigFile(dirC).autoStart === false, 'config.json 记录 autoStart=false');
+
+    /* ============ 6. 托盘驻留（startMinimizedToTray） ============ */
+    console.log('\n[6] 校验 startMinimizedToTray（托盘助手启停与生命周期）');
+    const dirH = makeDir('h');
+    const portH = await freePort();
+    const sH = new Server(dirH, portH, { REMINDER_TRAY_DISABLE: '0' });
+    servers.push(sH);
+    const rtH = await waitForApi(portH);
+    // 先把配置端口对齐测试端口，避免后面任何 POST 都触发热切换到默认 28765
+    await request(portH, 'POST', '/api/config', { webPort: portH });
+    check(rtH.runtime.traySupported === true, 'runtime 报告当前系统支持托盘', JSON.stringify(rtH.runtime));
+    check(rtH.runtime.trayActive === true, '默认配置下启动时自动拉起托盘助手', JSON.stringify(rtH.runtime));
+    const trayPid1 = rtH.runtime.trayPid;
+    trayPidsToClean.push(trayPid1);
+    check(trayPid1 > 0 && isPidAlive(trayPid1), 'runtime 返回的托盘助手 pid 真实存活', String(trayPid1));
+    check(sH.hasLog(/托盘图标已启动/), '启动日志记录托盘助手已拉起');
+
+    // 关闭开关：配置落盘、运行时状态、助手进程三者都要同步
+    const trayOff = await request(portH, 'POST', '/api/config', { startMinimizedToTray: false });
+    const offTrayApplied = trayOff.json && trayOff.json.applied && trayOff.json.applied.tray;
+    check(offTrayApplied && offTrayApplied.changed === true && offTrayApplied.active === false,
+      '关闭开关后托盘状态立即变为未启动', JSON.stringify(offTrayApplied));
+    check(readConfigFile(dirH).startMinimizedToTray === false, 'config.json 记录 startMinimizedToTray=false');
+    const rtOff = await request(portH, 'GET', '/api/config');
+    check(rtOff.json.runtime.trayActive === false, 'runtime.trayActive 同步为 false');
+    // 关闭时应让助手恢复被隐藏的控制台（写 show 标记），而不是让控制台一直藏着
+    let stopCommands = [];
+    try {
+      const trayTempDir = path.join(os.tmpdir(), 'win7-tiny-reminder-tray');
+      stopCommands = fs.readdirSync(trayTempDir)
+        .filter(f => f.indexOf('tray-' + sH.child.pid + '-') === 0 && /\.stop$/.test(f))
+        .map(f => fs.readFileSync(path.join(trayTempDir, f), 'utf-8').trim());
+    } catch (e) { /* 目录不存在时按空处理 */ }
+    check(stopCommands.indexOf('show') !== -1, '关闭托盘时写入 show 标记以恢复控制台',
+      JSON.stringify(stopCommands));
+    check(await waitPidGone(trayPid1, 10000), '关闭托盘后助手进程自行退出（不留幽灵进程）', 'pid=' + trayPid1);
+
+    // 重新开启：不需要重启服务就能立刻出现托盘图标
+    const trayOn = await request(portH, 'POST', '/api/config', { startMinimizedToTray: true });
+    const onTrayApplied = trayOn.json && trayOn.json.applied && trayOn.json.applied.tray;
+    check(onTrayApplied && onTrayApplied.ok === true && onTrayApplied.active === true,
+      '重新开启后托盘助手立即启动', JSON.stringify(onTrayApplied));
+    const trayPid2 = onTrayApplied && onTrayApplied.pid;
+    trayPidsToClean.push(trayPid2);
+    check(trayPid2 > 0 && isPidAlive(trayPid2), '新的托盘助手进程存活', String(trayPid2));
+
+    // 端口热切换：托盘菜单里的链接必须跟着换到新端口
+    const portH2 = await freePort();
+    const switchH = await request(portH, 'POST', '/api/config', { webPort: portH2 });
+    const switchTray = switchH.json && switchH.json.applied && switchH.json.applied.tray;
+    check(switchTray && switchTray.restarted === true && switchTray.active === true,
+      '端口切换后托盘助手自动重启以更新菜单链接', JSON.stringify(switchTray));
+    const trayPid3 = switchTray && switchTray.pid;
+    trayPidsToClean.push(trayPid3);
+    const oldTrayGone = await waitPidGone(trayPid2, 10000);
+    check(oldTrayGone && isPidAlive(trayPid3), '旧助手退出、新助手按新端口运行',
+      'old=' + trayPid2 + ' new=' + trayPid3);
+
+    // 主程序退出（模拟直接关闭控制台/被结束进程）时，托盘图标应自行消失
+    await sH.stop();
+    check(await waitPidGone(trayPid3, 10000), '主程序退出后托盘助手自动退出', 'pid=' + trayPid3);
   } catch (e) {
     console.error('\n测试脚本异常:', e);
     for (const s of servers) {
@@ -489,6 +588,12 @@ async function main() {
   } finally {
     for (const s of servers) {
       try { await s.stop(); } catch (e) { /* ignore */ }
+    }
+    // 兜底清掉测试期间拉起的托盘助手（正常情况下它们会检测到主程序退出而自行结束）
+    for (const pid of trayPidsToClean) {
+      if (isPidAlive(pid)) {
+        try { process.kill(pid); } catch (e) { /* ignore */ }
+      }
     }
     regCleanup();
     for (const d of allDirs) {
